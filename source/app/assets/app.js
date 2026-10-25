@@ -38,7 +38,8 @@ const ICON = {
 
 /* ---------------- firebase ---------------- */
 const fbApp = FB.initializeApp(CFG.firebase);
-const auth = FB.initializeAuth(fbApp, { persistence: FB.browserLocalPersistence });
+// the web version (iPhone) signs in with Google in a popup; the Android app uses the browser page instead
+const auth = FB.initializeAuth(fbApp, N ? { persistence: FB.browserLocalPersistence } : { persistence: FB.browserLocalPersistence, popupRedirectResolver: FB.browserPopupRedirectResolver });
 const db = FB.initializeFirestore(fbApp, { experimentalAutoDetectLongPolling: true });
 if (CFG.emulator) {
   FB.connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
@@ -114,20 +115,21 @@ function priceFor(o, name, keys) {
   for (const kk of keys || []) if (p[kk] != null && p[kk] !== '') return num(p[kk]);
   return null;
 }
+const itemPrice = it => (it.price == null || it.price === '' ? null : num(it.price));
 function computeBill(o, people) {
   const groups = groupsOf(o, people);
   const keysOf = {};
   for (const g of groups) for (const k of g.keys) keysOf[k] = g.keys;
-  const unit = name => priceFor(o, name, keysOf[F.normalize(name)]);
+  const unit = it => { const h = priceFor(o, it.name, keysOf[F.normalize(it.name)]); return h != null ? h : itemPrice(it); };
   const rows = new Map(people.map(p => [p.id, { p, lines: [], sub: 0 }]));
   for (const p of people) for (const it of p.items || []) {
-    const u = unit(it.name), a = (u || 0) * qtyOf(it);
+    const u = unit(it), a = (u || 0) * qtyOf(it);
     const r = rows.get(p.id); r.sub += a; r.lines.push({ n: it.name, q: qtyOf(it), note: it.note || '', u, a });
   }
   for (const s of o.shared || []) {
     const who = (s.sharers || []).filter(id => rows.has(id));
     if (!who.length) continue;
-    const u = unit(s.name), a = (u || 0) * qtyOf(s) / who.length;
+    const u = unit(s), a = (u || 0) * qtyOf(s) / who.length;
     for (const id of who) { const r = rows.get(id); r.sub += a; r.lines.push({ n: s.name, q: qtyOf(s), u, a, split: who.length }); }
   }
   const f = o.fees || {};
@@ -147,7 +149,7 @@ function computeBill(o, people) {
   const computed = list.reduce((a, r) => a + r.total, 0);
   const receipt = num(f.receipt);
   if (receipt > 0 && computed > 0) for (const r of list) { r.adj = r.total * (receipt / computed - 1); r.total += r.adj; }
-  const missing = groups.filter(g => g.items.some(it => unit(it.name) == null)).length;
+  const missing = groups.filter(g => g.items.some(it => unit(it) == null)).length;
   return { groups, rows: list, sub: S0, disc, computed, grand: list.reduce((a, r) => a + r.total, 0), missing, receipt };
 }
 // the part of the bill a member is allowed to see: their own share only
@@ -267,10 +269,17 @@ function openOrder(id) {
           renderOrderKeepScroll(); syncBills();
         }));
       } else {
-        subs.order.push(FB.onSnapshot(D('orders', id, 'people', uid), ps => {
+        const own = () => subs.order.push(FB.onSnapshot(D('orders', id, 'people', uid), ps => {
           S.me = ps.exists() ? { id: ps.id, ...ps.data() } : null;
+          S.people = S.me ? [S.me] : [];
           renderOrderKeepScroll();
         }, () => { }));
+        // only people in the order may list it; anyone else falls back to their own (missing) entry and sees "Join"
+        subs.order.push(FB.onSnapshot(C('orders', id, 'people'), ps => {
+          S.people = ps.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.id === uid) - (a.id === uid) || ts(a.joinedAt) - ts(b.joinedAt));
+          S.me = S.people.find(p => p.id === uid) || null;
+          renderOrderKeepScroll();
+        }, () => own()));
       }
     }
     renderOrderKeepScroll();
@@ -379,7 +388,7 @@ function tabSettings() {
       <div class="list-row"><div class="grow"><div class="t">Signed in as</div><div class="sub">${esc(p.username ? '@' + p.username : (S.user && S.user.email) || '')}</div></div></div>
       <div class="list-row tap" data-a="signOut"><div class="grow t" style="color:var(--danger)">Sign out</div></div>
     </div>
-    <p class="sub" style="text-align:center;margin-top:16px">Lamma 2.0</p>`;
+    <p class="sub" style="text-align:center;margin-top:16px">Lamma 2.1</p>`;
 }
 
 /* ----- order ----- */
@@ -423,8 +432,8 @@ function hostChecklist(o, bill) {
   const others = rows.filter(r => r.p.id !== o.hostUid);
   const paid = others.filter(r => r.p.paid);
   const owed = others.reduce((a, r) => a + r.total, 0), got = paid.reduce((a, r) => a + r.total, 0);
-  if (!rows.some(r => r.lines.length)) return `<p class="hint">Only you can see this checklist: every person, what they ordered and what they pay.</p><div class="empty">Nobody has added food yet. Share the invite link, or add people without the app in Names.</div>`;
-  return `<p class="hint">Only you can see this list. Tick people off when they get their food and when they pay you.</p>
+  if (!rows.some(r => r.lines.length)) return `<p class="hint">Your checklist: every person, what they ordered and what they pay.</p><div class="empty">Nobody has added food yet. Share the invite link, or add people without the app in Names.</div>`;
+  return `<p class="hint">Only you, the host, can tick these. Tick people off when they get their food and when they pay you.</p>
     <div class="card"><div class="stat"><span class="sub">Paid ${paid.length} of ${others.length}</span><span><b>${money(got, o.currency)}</b> <span class="sub">of ${money(owed, o.currency)}</span></span></div>
       <div class="progress"><i style="width:${owed ? got / owed * 100 : 0}%"></i></div>
       ${bill.missing ? `<p class="sub" style="margin-top:10px;color:var(--warn)">${bill.missing} food${bill.missing > 1 ? 's have' : ' has'} no price yet. <a href="#" data-a="orderTab" data-v="prices">Add prices</a></p>` : ''}</div>
@@ -470,11 +479,13 @@ function hostFoods(o, bill) {
 }
 function hostPrices(o, bill) {
   const f = o.fees || {};
-  return `<p class="hint">Type the prices from the receipt (the price of one). Lamma adds VAT, service and delivery and splits them fairly.</p>
+  return `<p class="hint">Everyone types the price of their own food. Type a price here only to correct it from the receipt; it then applies to everyone who ordered that food.</p>
     ${bill.groups.length ? `<div class="card flush">${bill.groups.map(g => {
-      const u = g.items.map(i => priceFor(o, i.name, g.keys)).find(v => v != null);
-      return `<div class="list-row"><div class="grow"><div class="t" dir="auto">${esc(g.label)}</div><div class="sub">× ${sumQty(g.items)}</div></div>
-        <input class="inp num ${u == null ? 'missing' : ''}" inputmode="decimal" placeholder="0" value="${u == null ? '' : u}" data-f="price" data-v="${esc(g.anchor)}"></div>`;
+      const h = priceFor(o, g.label, g.keys);
+      const typed = [...new Set(g.items.map(itemPrice).filter(v => v != null))];
+      const missing = h == null && g.items.some(i => itemPrice(i) == null);
+      return `<div class="list-row"><div class="grow"><div class="t" dir="auto">${esc(g.label)}</div><div class="sub">× ${sumQty(g.items)}${typed.length ? ` · friends typed ${typed.map(v => money(v, o.currency)).join(', ')}` : ' · no price yet'}</div></div>
+        <input class="inp num ${missing ? 'missing' : ''}" inputmode="decimal" placeholder="${typed.length === 1 ? typed[0] : '0'}" value="${h == null ? '' : h}" data-f="price" data-v="${esc(g.anchor)}"></div>`;
     }).join('')}</div>` : '<div class="empty">No food yet.</div>'}
     <div class="section"><h2>Fees</h2></div>
     <div class="card">
@@ -508,25 +519,39 @@ function refreshPrices() {
 function memberView(o) {
   const me = S.me;
   if (!me) return `<div class="card"><b>You're not in this order.</b><p class="sub">Join it to add your food.</p><button class="btn primary block" style="margin-top:12px" data-a="joinThis">Join this order</button></div>`;
-  const b = me.bill;
-  return `<p class="hint">Only you and ${esc(o.hostName)} can see your order.</p>
-    <div class="card"><div class="person-head"><div class="grow"><div class="t">Your order</div></div>${o.open ? `<button class="btn sm primary" data-a="itemSheet">Add food</button>` : '<span class="badge">Closed</span>'}</div>
-      <div style="margin-top:8px">${(me.items || []).length ? me.items.map(it => `<div class="item-line" ${o.open ? `data-a="itemSheet" data-id="${it.id}"` : ''}><span class="q">${qtyOf(it)}×</span><span class="grow" dir="auto">${esc(it.name)}${it.note ? `<span class="note" dir="auto">${esc(it.note)}</span>` : ''}</span>${o.open ? `<span class="chev">${ICON.chev}</span>` : ''}</div>`).join('') : `<p class="sub">You haven't added anything yet. Check the menu, then tap “Add food”.</p>`}</div>
+  const bill = computeBill(o, S.people);
+  const r = bill.rows.find(x => x.p.id === me.id);
+  const others = S.people.filter(p => p.id !== me.id);
+  const itemRow = (it, mine) => {
+    const u = itemPrice(it);
+    return `<div class="item-line" ${mine && o.open ? `data-a="itemSheet" data-id="${it.id}"` : ''}><span class="q">${qtyOf(it)}×</span>
+      <span class="grow" dir="auto">${esc(it.name)}${it.note ? `<span class="note" dir="auto">${esc(it.note)}</span>` : ''}</span>
+      <span class="a">${u == null ? '<span class="muted small">no price</span>' : money(u * qtyOf(it), o.currency)}</span>
+      ${mine ? (o.open ? `<span class="chev">${ICON.chev}</span>` : '') : (o.open ? `<button class="btn sm ghost" style="height:30px;padding:0 8px" data-a="meToo" data-p="${it.pid || ''}" data-id="${it.id}">+ Me too</button>` : '')}</div>`;
+  };
+  return `<div class="card"><div class="person-head"><div class="grow"><div class="t">Your order</div></div>${o.open ? `<button class="btn sm primary" data-a="itemSheet">Add food</button>` : '<span class="badge">Closed</span>'}</div>
+      <div style="margin-top:8px">${(me.items || []).length ? me.items.map(it => itemRow(it, true)).join('') : `<p class="sub">You haven't added anything yet. Check the menu, then tap “Add food”, or tap “+ Me too” on a friend's food below.</p>`}</div>
     </div>
     <div class="card">
       <div class="person-head"><div class="grow"><div class="t">What you pay</div></div>${me.paid ? '<span class="badge good">Paid</span>' : ''}</div>
-      ${b && b.total > 0 ? `<div style="margin-top:8px">
-        ${b.lines.map(l => `<div class="money"><span dir="auto">${l.q}× ${esc(l.n)}${l.split ? ` (shared by ${l.split})` : ''}</span><b>${l.priced ? money(l.a, o.currency) : '–'}</b></div>`).join('')}
-        ${b.disc ? `<div class="money"><span>Discount</span><b>−${money(b.disc, o.currency)}</b></div>` : ''}
-        ${b.service ? `<div class="money"><span>Service ${b.servicePct}%</span><b>${money(b.service, o.currency)}</b></div>` : ''}
-        ${b.vat ? `<div class="money"><span>VAT ${b.vatPct}%</span><b>${money(b.vat, o.currency)}</b></div>` : ''}
-        ${b.delivery ? `<div class="money"><span>Your part of delivery</span><b>${money(b.delivery, o.currency)}</b></div>` : ''}
-        ${b.adj ? `<div class="money"><span>Matched to the receipt</span><b>${money(b.adj, o.currency)}</b></div>` : ''}
-        <div class="money total"><span>Total</span><span>${money(b.total, o.currency)}</span></div>
-        ${b.missing ? `<p class="sub" style="margin-top:8px">The host is still adding prices, so this may change.</p>` : ''}
+      ${r && r.total > 0 ? `<div style="margin-top:8px">
+        ${r.lines.map(l => `<div class="money"><span dir="auto">${l.q}× ${esc(l.n)}${l.split ? ` (shared by ${l.split})` : ''}</span><b>${l.u != null ? money(l.a, o.currency) : '–'}</b></div>`).join('')}
+        ${r.disc ? `<div class="money"><span>Discount</span><b>−${money(r.disc, o.currency)}</b></div>` : ''}
+        ${r.service ? `<div class="money"><span>Service ${num(o.fees.service)}%</span><b>${money(r.service, o.currency)}</b></div>` : ''}
+        ${r.vat ? `<div class="money"><span>VAT ${num(o.fees.vat)}%</span><b>${money(r.vat, o.currency)}</b></div>` : ''}
+        ${r.delivery ? `<div class="money"><span>Your part of delivery</span><b>${money(r.delivery, o.currency)}</b></div>` : ''}
+        ${r.adj ? `<div class="money"><span>Matched to the receipt</span><b>${money(r.adj, o.currency)}</b></div>` : ''}
+        <div class="money total"><span>Total</span><span>${money(r.total, o.currency)}</span></div>
+        ${r.lines.some(l => l.u == null) ? `<p class="sub" style="margin-top:8px">Some food has no price yet, so this may change.</p>` : ''}
         ${!me.paid && o.instapay ? `<button class="btn primary block" style="margin-top:12px" data-a="payInsta">Pay ${esc(o.hostName)} with InstaPay</button>` : ''}
-      </div>` : `<p class="sub" style="margin-top:6px">Your total shows up here once ${esc(o.hostName)} adds the prices from the receipt.</p>`}
+      </div>` : `<p class="sub" style="margin-top:6px">Add your food with its price and your total shows up here, including your part of VAT, service and delivery.</p>`}
     </div>
+    <div class="section"><h2>Who's in (${S.people.length})</h2></div>
+    <p class="hint">Everyone's orders. Tap “+ Me too” to add the same food to your order.</p>
+    ${others.map(p => `<div class="card">
+      <div class="person-head"><div class="initial">${esc(initials(p.name))}</div><div class="grow"><div class="t">${esc(p.name)}${p.id === o.hostUid ? ' <span class="badge">Host</span>' : ''}</div><div class="sub">${(p.items || []).length ? `${sumQty(p.items)} item${sumQty(p.items) > 1 ? 's' : ''}` : 'Hasn\'t ordered yet'}</div></div></div>
+      ${(p.items || []).length ? `<div style="margin-top:8px">${p.items.map(it => itemRow({ ...it, pid: p.id }, false)).join('')}</div>` : ''}
+    </div>`).join('')}
     ${o.open ? `<button class="btn block ghost danger" data-a="leaveOrder">Leave this order</button>` : ''}`;
 }
 
@@ -704,11 +729,14 @@ function sheetItem(itemId, personId) {
   const pid = personId || S.user.uid;
   const person = isHost() ? S.people.find(p => p.id === pid) : S.me;
   const it = itemId ? (person.items || []).find(i => i.id === itemId) : null;
-  const known = isHost() ? computeBill(o, S.people).groups.map(g => g.label) : [];
+  const known = computeBill(o, S.people).groups.map(g => g.label);
   const s = openSheet(`<h2>${it ? 'Change food' : 'Add food'}</h2><p class="sub">${person.id === S.user.uid ? 'For you' : 'For ' + esc(person.name)}</p>
     <div class="field"><label>Food</label><input class="inp" id="it-name" value="${esc(it ? it.name : '')}" placeholder="e.g. Zinger sandwich" dir="auto" autocomplete="off">
       ${known.length ? `<div class="chips">${known.slice(0, 8).map(n => `<button data-a="pickName" data-v="${esc(n)}">${esc(n)}</button>`).join('')}</div>` : ''}</div>
-    <div class="field"><label>How many</label><div class="stepper"><button data-a="qty" data-v="-1">−</button><span class="v" id="it-qty">${it ? qtyOf(it) : 1}</span><button data-a="qty" data-v="1">+</button></div></div>
+    <div class="grid2">
+      <div class="field"><label>How many</label><div class="stepper"><button data-a="qty" data-v="-1">−</button><span class="v" id="it-qty">${it ? qtyOf(it) : 1}</span><button data-a="qty" data-v="1">+</button></div></div>
+      <div class="field"><label>Price of one</label><input class="inp" id="it-price" inputmode="decimal" placeholder="${esc(o.currency)}" value="${it && itemPrice(it) != null ? itemPrice(it) : ''}"></div>
+    </div>
     <div class="field"><label>Note <span class="opt">(optional)</span></label><input class="inp" id="it-note" value="${esc(it ? it.note : '')}" placeholder="e.g. no onions, spicy" dir="auto"></div>
     <button class="btn primary block" data-a="saveItem">${it ? 'Save' : 'Add'}</button>
     ${it ? `<button class="btn block ghost danger" style="margin-top:6px" data-a="deleteItem">Remove</button>` : ''}`);
@@ -868,14 +896,30 @@ const A = {
     closeSheet();
   },
   itemSheet: el => sheetItem(el.dataset.id || null, el.dataset.p || null),
-  pickName: el => { $('#it-name').value = el.dataset.v; },
+  pickName: el => {
+    $('#it-name').value = el.dataset.v;
+    // reuse the price someone already typed for the same food
+    const g = computeBill(S.order, S.people).groups.find(x => x.label === el.dataset.v);
+    const known = g && g.items.map(itemPrice).find(v => v != null);
+    if (known != null && !$('#it-price').value) $('#it-price').value = known;
+  },
+  meToo: async el => {
+    const src = S.people.find(p => p.id === el.dataset.p), it = src && (src.items || []).find(i => i.id === el.dataset.id);
+    if (!it || !S.me) return;
+    const items = [...(S.me.items || [])];
+    const same = items.find(i => F.normalize(i.name) === F.normalize(it.name) && (i.note || '') === '');
+    if (same) same.qty = qtyOf(same) + 1;
+    else items.push({ id: rid(8), name: it.name, qty: 1, note: '', price: itemPrice(it) });
+    try { await writeItems(S.me.id, items); toast(`Added ${it.name} to your order`); } catch (e) { toast('Could not add it. Check your internet.'); }
+  },
   qty: el => { const v = $('#it-qty'); v.textContent = Math.max(1, Math.min(99, +v.textContent + +el.dataset.v)); },
   saveItem: async () => {
     const s = $('.sheet'), name = $('#it-name').value.trim();
     if (!name) { $('#it-name').focus(); return; }
     const person = isHost() ? S.people.find(p => p.id === s._pid) : S.me;
     const items = [...(person.items || [])];
-    const data = { name, qty: +$('#it-qty').textContent, note: $('#it-note').value.trim() };
+    const pr = $('#it-price').value.trim();
+    const data = { name, qty: +$('#it-qty').textContent, note: $('#it-note').value.trim(), price: pr === '' ? null : num(pr) };
     if (s._itemId) { const i = items.findIndex(x => x.id === s._itemId); items[i] = { ...items[i], ...data }; }
     else items.push({ id: rid(8), ...data });
     try {
@@ -993,3 +1037,5 @@ document.addEventListener('input', e => {
 });
 
 applyTheme();
+// the web version (iPhone) gets invite links as ?c=CODE in its own address
+if (!N && /[?&]c=/.test(location.search)) { handleLink(location.href); history.replaceState(null, '', location.pathname); }

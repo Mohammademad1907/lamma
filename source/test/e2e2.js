@@ -106,6 +106,7 @@ const server = http.createServer((req, res) => {
   for (const [n, q] of [['zinger  sandwich', 2], ['chicken Burger', 1], ['pepsi', 1]]) {
     await tap(guest, '[data-a="itemSheet"]');
     await guest.fill('#it-name', n);
+    await guest.fill('#it-price', n.includes('zinger') ? '95' : n.includes('pepsi') ? '20' : '');
     for (let i = 1; i < q; i++) await tap(guest, '[data-a="qty"][data-v="1"]');
     await tap(guest, '[data-a="saveItem"]');
     await guest.waitForTimeout(300);
@@ -119,6 +120,14 @@ const server = http.createServer((req, res) => {
     try { const s = await FB.getDoc(FB.doc(db, 'orders', S.order.id, 'people', S.order.hostUid)); return 'LEAK ' + s.exists(); }
     catch (e) { return e.code; }
   });
+  const editOther = await guest.evaluate(async () => {
+    const other = S.people.find(p => p.id !== S.user.uid && p.noApp);
+    try { await FB.updateDoc(FB.doc(db, 'orders', S.order.id, 'people', other.id), { items: [] }); return 'EDITED OTHER'; }
+    catch (e) { return e.code; }
+  });
+  await guest.locator('[data-a="meToo"]').first().click();
+  await guest.waitForTimeout(800);
+  await shot(guest, '10b-guest-everyone');
   const forge = await guest.evaluate(async () => {
     try { await FB.updateDoc(FB.doc(db, 'orders', S.order.id, 'people', S.user.uid), { paid: true }); return 'FORGED'; }
     catch (e) { return e.code; }
@@ -171,7 +180,7 @@ const server = http.createServer((req, res) => {
 
   const memberBill = await guest.evaluate(() => null);
   console.log('code', code);
-  console.log('member reads others (expect permission-denied):', leak, '| host doc:', leakOther, '| self-mark paid:', forge);
+  console.log('member reads others (now allowed):', leak, '| host doc:', leakOther, '| edit other (expect denied):', editOther, '| self-mark paid (expect denied):', forge);
   console.log('ERRORS:', errors.length ? errors.join('\n') : 'none');
   await b.close();
   server.close();

@@ -1,5 +1,5 @@
 rules_version = '2';
-// Lamma security rules: hosts see everything in their orders, members only see their own order.
+// Lamma security rules: people in an order see each other's food; each edits only their own, the host edits all.
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
@@ -40,7 +40,9 @@ service cloud.firestore {
       match /people/{pid} {
         function isHost() { return orderData(oid).hostUid == me(); }
         function isOpen() { return orderData(oid).open == true; }
-        allow read: if signedIn() && (pid == me() || isHost());
+        // everyone who joined the order can see who's in and what they ordered
+        allow read: if signedIn() && (pid == me() || isHost() ||
+          exists(/databases/$(database)/documents/orders/$(oid)/people/$(me())));
         allow create: if signedIn() && (isHost() ||
           (pid == me() && isOpen() && request.resource.data.keys().hasOnly(['uid', 'name', 'items', 'joinedAt', 'updatedAt'])));
         allow update: if signedIn() && (isHost() ||

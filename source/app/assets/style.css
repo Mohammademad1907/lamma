@@ -187,3 +187,8 @@ select.inp { appearance: none; -webkit-appearance: none; background-image: linea
 .or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; margin: 18px 0; }
 .or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--line); }
 .g-logo { width: 18px; height: 18px; }
+
+/* iPhone notch and home bar when used as a web app */
+body { padding-top: env(safe-area-inset-top); }
+.nav { height: calc(var(--nav) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); }
+.sheet { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
