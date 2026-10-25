@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in to Lamma</title><link rel="icon" href="../logo.svg"><link rel="stylesheet" href="../style.css"></head>
+<body><main>
+  <img class="logo" src="../logo.svg" alt="">
+  <h1>Sign in with Google</h1>
+  <p id="msg">Choose your Google account, then you'll go back to the Lamma app.</p>
+  <button class="btn primary" id="go">Continue with Google</button>
+  <a class="btn primary" id="back" style="display:none">Back to Lamma</a>
+</main>
+<script src="config.js"></script>
+<script src="firebase-auth.js"></script>
+<script>
+  var app = FBW.initializeApp(LAMMA_WEB_CONFIG);
+  var auth = FBW.getAuth(app);
+  var msg = document.getElementById('msg'), go = document.getElementById('go'), back = document.getElementById('back');
+  go.onclick = function () {
+    go.disabled = true;
+    FBW.signInWithPopup(auth, new FBW.GoogleAuthProvider()).then(function (res) {
+      var cred = FBW.GoogleAuthProvider.credentialFromResult(res);
+      var link = 'intent://auth?t=' + encodeURIComponent(cred.idToken) + '#Intent;scheme=lamma;package=com.lamma.app;end';
+      msg.textContent = 'Signed in as ' + (res.user.email || res.user.displayName) + '. Tap below to go back to Lamma.';
+      go.style.display = 'none'; back.style.display = 'flex'; back.href = link;
+      location.href = link;
+    }).catch(function (e) {
+      go.disabled = false;
+      msg.textContent = e.code === 'auth/popup-closed-by-user' ? 'Sign-in was cancelled. Try again.' : 'Sign-in failed (' + e.code + '). Try again.';
+    });
+  };
+</script>
+</body></html>

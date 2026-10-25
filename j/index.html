@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Join an order on Lamma</title><link rel="icon" href="../logo.svg"><link rel="stylesheet" href="../style.css"></head>
+<body><main>
+  <img class="logo" src="../logo.svg" alt="">
+  <h1>You're invited to an order</h1>
+  <p>Open Lamma to add your food. If it doesn't open by itself, use this code:</p>
+  <div class="code" id="code">······</div>
+  <a class="btn primary" id="open" href="#">Open in Lamma</a>
+  <a class="btn" href="../Lamma.apk">I don't have Lamma yet</a>
+  <small>New to Lamma? Install it, sign in, tap “Join with code” and type the code above.</small>
+</main>
+<script>
+  var c = (new URLSearchParams(location.search).get('c') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+  document.getElementById('code').textContent = c || '——';
+  var link = 'intent://join?c=' + c + '#Intent;scheme=lamma;package=com.lamma.app;end';
+  var a = document.getElementById('open');
+  a.href = /Android/i.test(navigator.userAgent) ? link : 'lamma://join?c=' + c;
+  if (c && /Android/i.test(navigator.userAgent)) setTimeout(function () { location.href = link; }, 400);
+</script>
+</body></html>

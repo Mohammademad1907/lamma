@@ -1,0 +1,52 @@
+rules_version = '2';
+// Lamma security rules: hosts see everything in their orders, members only see their own order.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+    function orderData(oid) { return get(/databases/$(database)/documents/orders/$(oid)).data; }
+
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow write: if signedIn() && me() == uid;
+      match /joined/{oid} {
+        allow read, write: if signedIn() && me() == uid;
+      }
+    }
+
+    match /codes/{code} {
+      allow get: if signedIn();
+      allow create: if signedIn() && request.resource.data.hostUid == me();
+      allow update, delete: if signedIn() && resource.data.hostUid == me();
+    }
+
+    match /menus/{mid} {
+      allow get: if signedIn();
+      allow list: if signedIn() && resource.data.ownerUid == me();
+      allow create: if signedIn() && request.resource.data.ownerUid == me();
+      allow update, delete: if signedIn() && resource.data.ownerUid == me();
+      match /photos/{pid} {
+        allow read: if signedIn();
+        allow write: if signedIn() && get(/databases/$(database)/documents/menus/$(mid)).data.ownerUid == me();
+      }
+    }
+
+    match /orders/{oid} {
+      allow get: if signedIn();
+      allow list: if signedIn() && resource.data.hostUid == me();
+      allow create: if signedIn() && request.resource.data.hostUid == me();
+      allow update, delete: if signedIn() && resource.data.hostUid == me();
+
+      match /people/{pid} {
+        function isHost() { return orderData(oid).hostUid == me(); }
+        function isOpen() { return orderData(oid).open == true; }
+        allow read: if signedIn() && (pid == me() || isHost());
+        allow create: if signedIn() && (isHost() ||
+          (pid == me() && isOpen() && request.resource.data.keys().hasOnly(['uid', 'name', 'items', 'joinedAt', 'updatedAt'])));
+        allow update: if signedIn() && (isHost() ||
+          (pid == me() && isOpen() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'items', 'updatedAt'])));
+        allow delete: if signedIn() && (isHost() || pid == me());
+      }
+    }
+  }
+}

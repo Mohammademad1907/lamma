@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Lamma</title>
+<script>
+  // apply the theme before first paint to avoid a flash
+  try {
+    var t = localStorage.getItem('lamma.theme') || 'system';
+    var sys = window.LammaNative ? LammaNative.isSystemDark() : matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.dataset.theme = t === 'system' ? (sys ? 'dark' : 'light') : t;
+  } catch (e) {}
+</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app"><div class="loading"><div class="spinner"></div></div></div>
+<div id="sheet-root"></div>
+<div id="toast"></div>
+<input type="file" id="file-input" accept="image/*" multiple hidden>
+<script src="config.js"></script>
+<script src="lib/firebase.js"></script>
+<script src="fuzzy.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
