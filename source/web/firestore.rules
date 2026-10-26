@@ -1,5 +1,5 @@
 rules_version = '2';
-// Lamma security rules: people in an order see each other's food; each edits only their own, the host edits prices and ticks but not other people's food.
+// Lamma security rules: people in an order see each other's food; each edits their own; the host and co-hosts can edit everything.
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
@@ -11,6 +11,16 @@ service cloud.firestore {
       allow write: if signedIn() && me() == uid;
       match /joined/{oid} {
         allow read, write: if signedIn() && me() == uid;
+      }
+      // notifications: only the owner reads them; people in an order can send notes about that order
+      match /inbox/{nid} {
+        allow read, update, delete: if signedIn() && me() == uid;
+        allow create: if signedIn() && request.resource.data.from == me() && request.resource.data.read == false
+          && request.resource.data.keys().hasOnly(['type', 'title', 'body', 'orderId', 'from', 'fromName', 'at', 'read', 'amount'])
+          && request.resource.data.title is string && request.resource.data.title.size() < 200
+          && request.resource.data.get('body', '') is string && request.resource.data.get('body', '').size() < 600
+          && (exists(/databases/$(database)/documents/orders/$(request.resource.data.orderId)/people/$(me()))
+              || orderData(request.resource.data.orderId).hostUid == me());
       }
     }
 
@@ -35,10 +45,14 @@ service cloud.firestore {
       allow get: if signedIn();
       allow list: if signedIn() && resource.data.hostUid == me();
       allow create: if signedIn() && request.resource.data.hostUid == me();
-      allow update, delete: if signedIn() && resource.data.hostUid == me();
+      // the main host does everything; co-hosts too, except changing who the hosts are or deleting the order
+      allow update: if signedIn() && (resource.data.hostUid == me() ||
+        (me() in resource.data.get('coHosts', []) &&
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['hostUid', 'coHosts', 'code'])));
+      allow delete: if signedIn() && resource.data.hostUid == me();
 
       match /people/{pid} {
-        function isHost() { return orderData(oid).hostUid == me(); }
+        function isHost() { let o = orderData(oid); return o.hostUid == me() || me() in o.get('coHosts', []); }
         // open: not locked by the host, the deadline (lockAt, in ms) has not passed, not delivered
         function isOpen() {
           let o = orderData(oid);
@@ -52,9 +66,8 @@ service cloud.firestore {
         allow create: if signedIn() && (
           (isHost() && (pid == me() || request.resource.data.get('noApp', false) == true)) ||
           (pid == me() && isOpen() && request.resource.data.keys().hasOnly(['uid', 'name', 'items', 'joinedAt', 'updatedAt'])));
-        // the host can tick paid / got food on anyone, but only changes the food of offline members and their own
-        allow update: if signedIn() && (
-          (isHost() && (pid == me() || resource.data.get('noApp', false) == true || changed().hasOnly(['paid', 'received', 'bill']))) ||
+        // hosts can change anyone's food, prices and notes, and tick paid / got food
+        allow update: if signedIn() && (isHost() ||
           (pid == me() && isOpen() && changed().hasOnly(['name', 'items', 'updatedAt'])) ||
           (pid == me() && changed().hasOnly(['paid'])));
         allow delete: if signedIn() && (isHost() || (pid == me() && isOpen()));

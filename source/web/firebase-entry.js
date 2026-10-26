@@ -7,7 +7,7 @@ import {
 } from 'firebase/auth';
 import {
   initializeFirestore, connectFirestoreEmulator, doc, collection, getDoc, getDocs, setDoc, updateDoc,
-  deleteDoc, onSnapshot, query, where, orderBy, serverTimestamp, writeBatch, deleteField,
+  deleteDoc, onSnapshot, query, where, orderBy, serverTimestamp, writeBatch, deleteField, limit, arrayUnion, arrayRemove,
 } from 'firebase/firestore';
 
 window.FB = {
@@ -15,5 +15,5 @@ window.FB = {
   createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, updateProfile,
   GoogleAuthProvider, signInWithCredential, signInWithPopup, browserPopupRedirectResolver,
   initializeFirestore, connectFirestoreEmulator, doc, collection, getDoc, getDocs, setDoc, updateDoc,
-  deleteDoc, onSnapshot, query, where, orderBy, serverTimestamp, writeBatch, deleteField,
+  deleteDoc, onSnapshot, query, where, orderBy, serverTimestamp, writeBatch, deleteField, limit, arrayUnion, arrayRemove,
 };

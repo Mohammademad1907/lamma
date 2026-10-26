@@ -1,6 +1,10 @@
 package com.lamma.app;
 
 import android.app.Activity;
+import android.app.AlarmManager;
+import android.app.PendingIntent;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.ContentResolver;
@@ -251,6 +255,72 @@ public class MainActivity extends Activity {
                 @Override
                 public void run() { MainActivity.this.setBars(dark); }
             });
+        }
+
+        /** A new inbox note: shown as a phone notification unless Lamma is on screen (then the page shows a banner). */
+        @JavascriptInterface
+        public void notify(String id, String title, String body, String orderId, boolean foreground) {
+            if (!Notifier.firstTime(MainActivity.this, id) || foreground) return;
+            Notifier.show(MainActivity.this, id, title, body, orderId);
+        }
+
+        @JavascriptInterface
+        public void seen(String id) {
+            Notifier.firstTime(MainActivity.this, id);
+        }
+
+        /** Keeps the sign-in so the background check can read the inbox while the app is closed. Empty uid = signed out. */
+        @JavascriptInterface
+        public void setAuth(String refresh, String uid, String apiKey, String project, int emulator) {
+            SharedPreferences p = Notifier.prefs(MainActivity.this);
+            SharedPreferences.Editor e = p.edit();
+            if (!uid.equals(p.getString("uid", ""))) e.putLong("since", System.currentTimeMillis());
+            e.putString("refresh", refresh).putString("uid", uid).putString("apiKey", apiKey)
+                    .putString("project", project).putBoolean("emulator", emulator == 1).apply();
+            InboxJob.schedule(MainActivity.this);
+        }
+
+        /** A reminder at a set time, kept by the phone even if Lamma is closed. Same key replaces the old one. */
+        @JavascriptInterface
+        public void schedule(String key, double at, String title, String body, String orderId) {
+            Intent i = new Intent(MainActivity.this, AlarmReceiver.class)
+                    .putExtra("key", key).putExtra("title", title).putExtra("body", body).putExtra("orderId", orderId);
+            PendingIntent pi = PendingIntent.getBroadcast(MainActivity.this, key.hashCode(), i, PendingIntent.FLAG_UPDATE_CURRENT | 0x04000000);
+            AlarmManager am = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, (long) at, pi);
+        }
+
+        @JavascriptInterface
+        public void cancel(String key) {
+            Intent i = new Intent(MainActivity.this, AlarmReceiver.class);
+            PendingIntent pi = PendingIntent.getBroadcast(MainActivity.this, key.hashCode(), i, PendingIntent.FLAG_UPDATE_CURRENT | 0x04000000);
+            ((AlarmManager) getSystemService(Context.ALARM_SERVICE)).cancel(pi);
+        }
+
+        /** Android 13+ asks the person once to allow notifications. */
+        @JavascriptInterface
+        public void askNotify() {
+            if (Build.VERSION.SDK_INT < 33) return;
+            final String perm = "android.permission.POST_NOTIFICATIONS";
+            if (checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED) return;
+            SharedPreferences p = Notifier.prefs(MainActivity.this);
+            if (p.getBoolean("asked", false)) return;
+            p.edit().putBoolean("asked", true).apply();
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() { requestPermissions(new String[]{perm}, 9); }
+            });
+        }
+
+        @JavascriptInterface
+        public boolean notifyAllowed() {
+            return Build.VERSION.SDK_INT < 33 || checkSelfPermission("android.permission.POST_NOTIFICATIONS") == PackageManager.PERMISSION_GRANTED;
+        }
+
+        @JavascriptInterface
+        public void openNotifySettings() {
+            Intent i = new Intent("android.settings.APP_NOTIFICATION_SETTINGS").putExtra("android.provider.extra.APP_PACKAGE", getPackageName());
+            try { startActivity(i); } catch (Exception e) { openExternal("package:" + getPackageName()); }
         }
 
         /** Saves a text file to Downloads/Lamma (Android 10+), otherwise shares it. Returns true if saved. */

@@ -5,7 +5,7 @@ const CFG = window.LAMMA_CONFIG;
 const N = window.LammaNative || null;
 const F = window.Fuzzy;
 const FB = window.FB;
-const VERSION = '2.6';
+const VERSION = '2.7';
 const CURRENCIES = ['EGP', 'SAR', 'AED', 'KWD', 'QAR', 'USD', 'EUR', 'GBP'];
 const MAX_PHOTOS = 10;
 const USER_DOMAIN = 'users.lamma.app';
@@ -52,6 +52,8 @@ const ICON = {
   receipt: svg('<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>'),
   note: svg('<path d="M5 4h14v11l-5 5H5z"/><path d="M14 20v-5h5"/>'),
   checkCircle: svg('<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>'),
+  bell: svg('<path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 004 0"/>'),
+  crown: svg('<path d="M4 18h16M5 15l-1-8 5 4 3-6 3 6 5-4-1 8z"/>'),
   help: svg('<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 015 .5c0 1.7-2.5 2-2.5 3.5M12 17h.01"/>'),
   google: '<svg class="g-logo" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>',
 };
@@ -73,7 +75,7 @@ const S = {
   user: null, profile: null, view: 'loading', homeTab: 'mine', authMode: 'signin',
   hosted: [], joined: [], joinedOrders: {}, menus: [],
   order: null, people: [], me: null, screen: 'details', listTab: 'people', orderMissing: false, delivering: false,
-  pendingCode: null,
+  pendingCode: null, inbox: [],
 };
 const subs = { global: [], order: [], joined: {} };
 const stop = k => { subs[k].forEach(u => u()); subs[k] = []; };
@@ -292,6 +294,7 @@ function watchJoined() {
   for (const id of want) if (!subs.joined[id]) {
     subs.joined[id] = FB.onSnapshot(D('orders', id), s => {
       if (s.exists()) S.joinedOrders[id] = { id, ...s.data() }; else S.joinedOrders[id] = { id, gone: true };
+      scheduleDeadlines();
       if (S.view === 'home') render();
     }, () => { });
   }
@@ -302,7 +305,7 @@ FB.onAuthStateChanged(auth, async user => {
   for (const id of Object.keys(subs.joined)) subs.joined[id]();
   subs.joined = {}; S.joinedOrders = {};
   S.user = user;
-  if (!user) { S.view = 'auth'; render(); return; }
+  if (!user) { S.view = 'auth'; S.inbox = []; if (N && N.setAuth) N.setAuth('', '', '', '', 0); render(); return; }
   S.view = 'loading'; render();
   try { S.profile = await ensureProfile(user); } catch (e) { S.profile = { name: 'Me', username: '' }; }
   const uid = user.uid;
@@ -311,27 +314,110 @@ FB.onAuthStateChanged(auth, async user => {
   subs.global.push(FB.onSnapshot(FB.query(C('orders'), FB.where('hostUid', '==', uid)), s => {
     S.hosted = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => ts(b.createdAt) - ts(a.createdAt));
     rerenderHome();
+    scheduleDeadlines();
   }));
   subs.global.push(FB.onSnapshot(C('users', uid, 'joined'), s => {
     S.joined = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => ts(b.joinedAt) - ts(a.joinedAt));
     watchJoined();
     rerenderHome();
+    scheduleDeadlines();
   }));
   subs.global.push(FB.onSnapshot(FB.query(C('menus'), FB.where('ownerUid', '==', uid)), s => {
     S.menus = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => ts(b.updatedAt) - ts(a.updatedAt));
     rerenderHome();
   }));
+  watchInbox(uid);
+  if (N && N.askNotify) N.askNotify();
   S.view = 'home'; render();
+  if (S.pendingOrder) { const o = S.pendingOrder; S.pendingOrder = null; openOrder(o); }
   // after a refresh, open the order you were looking at
   if (WEB && savedOrder() && !S.pendingCode) openOrder(savedOrder());
   if (S.pendingCode) { const c = S.pendingCode; S.pendingCode = null; joinByCode(c); }
 });
+
+/* ---------------- notifications ----------------
+   Each person has an inbox (users/{uid}/inbox). Whoever does something writes a note into the inbox of
+   the people it concerns. The phone shows new notes as notifications: the Android app also checks every
+   15 minutes while closed, and sets alarms on the phone itself for deadlines and payment reminders. */
+function notifyUsers(uids, n) {
+  const me = S.user && S.user.uid;
+  const to = [...new Set(uids)].filter(u => u && u !== me && !String(u).startsWith('x_'));
+  const orderId = n.orderId || (S.order && S.order.id);
+  if (!to.length || !orderId) return Promise.resolve();
+  const b = FB.writeBatch(db), at = Date.now();
+  for (const u of to) b.set(D('users', u, 'inbox', rid(16)), { type: n.type, title: n.title, body: n.body || '', orderId, from: me, fromName: S.profile.name, at, read: false, ...(n.amount != null ? { amount: n.amount } : {}) });
+  return b.commit().catch(e => console.warn('notify failed', e));
+}
+const notifyMembers = n => notifyUsers(S.people.filter(p => !p.noApp).map(p => p.id), n);
+const unreadCount = () => S.inbox.filter(x => !x.read).length;
+const notifStart = Date.now();
+const shownNotes = new Set();
+function onInbox(list) {
+  const fresh = list.filter(x => !x.read && !shownNotes.has(x.id) && x.at > notifStart - 120000);
+  list.forEach(x => shownNotes.add(x.id));
+  S.inbox = list;
+  if (S.view === 'home' || S.view === 'inbox') render();
+  for (const x of fresh.reverse()) {
+    const inThisOrder = S.view === 'order' && S.order && S.order.id === x.orderId;
+    if (N && N.notify) N.notify(x.id, x.title, x.body || '', x.orderId || '', !document.hidden);
+    if (!document.hidden && !inThisOrder) banner(x);
+    if (x.type === 'delivered') schedulePayReminder(x.orderId, x.title, x.amount);
+  }
+  if (N && N.seen) list.forEach(x => N.seen(x.id));
+}
+// a tappable banner at the top while the app is open
+function banner(x) {
+  const el = document.createElement('button');
+  el.className = 'banner'; el.dataset.a = 'openNote'; el.dataset.id = x.id;
+  el.innerHTML = `${ICON.bell}<span><b>${esc(x.title)}</b><span class="sub">${esc(x.body || '')}</span></span>`;
+  document.body.appendChild(el);
+  setTimeout(() => el.classList.add('out'), 4500);
+  setTimeout(() => el.remove(), 5000);
+}
+function schedulePayReminder(orderId, title, amount) {
+  if (!N || !N.schedule || !orderId) return;
+  const o = S.joinedOrders[orderId] || (S.order && S.order.id === orderId ? S.order : null);
+  N.schedule('pay-' + orderId, Date.now() + 24 * 36e5, `Reminder: pay for ${o ? o.place : 'your order'}`, amount ? `You still owe ${money(amount, o && o.currency)}. Tap to pay and mark it as paid.` : 'Tap to see what you owe.', orderId);
+}
+// alarms on the phone for each open order you're in: 10 minutes before it locks, and when it locks
+function scheduleDeadlines() {
+  if (!N || !N.schedule || !S.user) return;
+  const orders = [...S.hosted, ...Object.values(S.joinedOrders)].filter(o => o && !o.gone && o.id);
+  for (const o of orders) {
+    const host = isHostOf(o, S.user.uid), future = o.lockAt && o.lockAt > Date.now() && o.open && !delivered(o);
+    if (future && o.lockAt - 10 * 60000 > Date.now()) N.schedule('dl10-' + o.id, o.lockAt - 10 * 60000, `${o.place} locks in 10 minutes`, host ? 'Check that everyone added their food.' : 'Add or check your food before it locks.', o.id);
+    else N.cancel('dl10-' + o.id);
+    if (future) N.schedule('dl-' + o.id, o.lockAt, `${o.place} is now locked`, host ? 'Time to order from the restaurant. Your full list is in the Delivery Checklist.' : 'The deadline passed, so food can\'t be changed now.', o.id);
+    else N.cancel('dl-' + o.id);
+  }
+}
+function viewInbox() {
+  const items = S.inbox;
+  const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : fmtDate(t); };
+  return `<div class="page no-nav"><div class="head">${backBtn()}<div class="grow"><h1>Notifications</h1></div>
+      ${unreadCount() ? `<button class="btn sm ghost" data-a="readAll">Mark all read</button>` : ''}</div>
+    ${N ? '' : `<p class="hint">On iPhone, notifications show here and as a banner while Lamma is open.</p>`}
+    ${items.length ? `<div class="card flush">${items.map(x => `<div class="list-row tap note-row ${x.read ? '' : 'unread'}" data-a="openNote" data-id="${x.id}">
+        <div class="initial">${esc(initials(x.fromName))}</div>
+        <div class="grow"><div class="t2">${esc(x.title)}</div><div class="sub">${esc(x.body || '')}</div><div class="sub small">${ago(x.at)}</div></div>
+        ${x.read ? '' : '<span class="unread-dot"></span>'}</div>`).join('')}</div>`
+      : `<div class="empty">No notifications yet. You'll see here when people join your orders, when an order locks or is delivered, and payment reminders.</div>`}
+  </div>`;
+}
+function watchInbox(uid) {
+  subs.global.push(FB.onSnapshot(FB.query(C('users', uid, 'inbox'), FB.orderBy('at', 'desc'), FB.limit(40)),
+    s => onInbox(s.docs.map(d => ({ id: d.id, ...d.data() }))), e => console.warn('inbox', e)));
+  // the Android app checks the inbox in the background with this sign-in
+  if (N && N.setAuth && auth.currentUser) N.setAuth(auth.currentUser.refreshToken || '', uid, CFG.firebase.apiKey, CFG.firebase.projectId, CFG.emulator ? 1 : 0);
+}
 
 /* ---------------- deep links & back button ---------------- */
 function handleLink(url) {
   const u = String(url || '');
   const tok = (u.match(/[?&#]t=([^&#]+)/) || [])[1];
   if (tok && /auth/.test(u)) { googleToken(decodeURIComponent(tok)); return; }
+  const oid = (u.match(/^lamma:\/\/order\?o=([A-Za-z0-9]+)/) || [])[1];
+  if (oid) { if (S.user) { closeSheet(); openOrder(oid); } else S.pendingOrder = oid; return; }
   const code = (u.match(/[?&]c=([A-Za-z0-9]{6})/) || [])[1];
   if (code) { if (S.user) joinByCode(code); else { S.pendingCode = code.toUpperCase(); toast('Sign in to join the order'); } }
 }
@@ -340,7 +426,7 @@ window.lammaBack = () => {
   if ($('.viewer')) { $('.viewer').remove(); return true; }
   if ($('#sheet-root').firstChild) { closeSheet(); return true; }
   if (S.view === 'order' && S.screen !== 'details') { showScreen('details'); return true; }
-  if (S.view === 'order' || S.view === 'menus' || S.view === 'settings') { goHome(); return true; }
+  if (['order', 'menus', 'settings', 'inbox'].includes(S.view)) { goHome(); return true; }
   return false;
 };
 
@@ -371,6 +457,7 @@ function openOrder(id) {
   subs.order.push(FB.onSnapshot(D('orders', id), s => {
     if (!s.exists()) { S.orderMissing = true; S.order = null; render(); return; }
     const first = !S.order;
+    S.orderMissing = false;
     S.order = { id: s.id, ...s.data() };
     if (first) remember();
     // redraw the moment the deadline passes
@@ -392,7 +479,7 @@ function openOrder(id) {
       }
     }
     renderOrderKeepScroll();
-  }, () => { S.orderMissing = true; render(); }));
+  }, e => { console.warn('order listener', e && e.code, e && e.message); S.orderMissing = true; render(); }));
   window.scrollTo(0, 0);
 }
 function renderOrderKeepScroll() {
@@ -404,7 +491,12 @@ function renderOrderKeepScroll() {
   render();
   window.scrollTo(0, y);
 }
-const isHost = () => !!(S.order && S.user && S.order.hostUid === S.user.uid);
+// the main host and the co-hosts they promoted run the order together
+const hostsOf = o => [o.hostUid, ...(o.coHosts || [])];
+const isHostOf = (o, uid) => !!o && hostsOf(o).includes(uid);
+const isHost = () => !!(S.order && S.user && isHostOf(S.order, S.user.uid));
+const isMainHost = () => !!(S.order && S.user && S.order.hostUid === S.user.uid);
+const hostNames = o => [o.hostName, ...(S.people.filter(p => (o.coHosts || []).includes(p.id)).map(p => p.name))].filter(Boolean);
 // the host's phone keeps the member count on the order so it shows on everyone's home screen
 function countMembers() {
   const o = S.order;
@@ -424,6 +516,7 @@ function render() {
   else if (S.view === 'order') el.innerHTML = viewOrder();
   else if (S.view === 'menus') el.innerHTML = viewMenus();
   else if (S.view === 'settings') el.innerHTML = viewSettings();
+  else if (S.view === 'inbox') el.innerHTML = viewInbox();
   else el.innerHTML = viewHome();
 }
 const backBtn = (a = 'home') => `<button class="icon-btn" data-a="${a}" aria-label="Back">${ICON.back}</button>`;
@@ -449,16 +542,19 @@ function orderCard(o) {
   return `<div class="ocard tap" data-a="openOrder" data-id="${o.id}">
     <div class="ocard-top"><div class="t" dir="auto">${esc(o.place || 'Order')}</div><div class="badges">${statusBadges(o)}</div></div>
     ${o.description ? `<p class="desc" dir="auto">${esc(o.description)}</p>` : ''}
-    <div class="meta"><span>${ICON.users} Hosted by ${esc(o.hostUid === S.user.uid ? 'you' : o.hostName || 'a friend')}</span><span>${fmtDate(ts(o.createdAt))}</span></div>
+    <div class="meta"><span>${ICON.users} Hosted by ${esc(o.hostUid === S.user.uid ? 'you' : o.hostName || 'a friend')}${(o.coHosts || []).includes(S.user.uid) ? ' and you' : (o.coHosts || []).length ? ` +${o.coHosts.length}` : ''}</span><span>${fmtDate(ts(o.createdAt))}</span></div>
     <div class="meta"><span>${ICON.users} ${plural(count, 'member')}</span>${o.lockAt && !locked(o) ? `<span>Closes in ${timeLeft(o.lockAt)}</span>` : ''}</div>
   </div>`;
 }
 function viewHome() {
   const mine = S.homeTab === 'mine';
-  const joined = S.joined.map(j => S.joinedOrders[j.id] || { id: j.id, place: j.place, hostName: j.hostName, createdAt: j.joinedAt }).filter(o => !o.gone);
-  const list = mine ? joined : S.hosted;
+  const all = S.joined.map(j => S.joinedOrders[j.id] || { id: j.id, place: j.place, hostName: j.hostName, createdAt: j.joinedAt }).filter(o => !o.gone);
+  const cohosted = all.filter(o => (o.coHosts || []).includes(S.user.uid));
+  const joined = all.filter(o => !cohosted.includes(o));
+  const list = mine ? joined : [...S.hosted, ...cohosted].sort((a, b) => ts(b.createdAt) - ts(a.createdAt));
   return `<div class="app-head">
       <div class="brand grow"><img src="logo.svg" alt=""><div><h1>Lamma</h1><div class="sub">${mine ? 'My Orders' : 'Hosted Orders'}</div></div></div>
+      <button class="icon-btn bell" data-a="go" data-v="inbox" aria-label="Notifications">${ICON.bell}${unreadCount() ? `<span class="dot-count">${unreadCount() > 9 ? '9+' : unreadCount()}</span>` : ''}</button>
       <button class="icon-btn" data-a="helpSheet" aria-label="How it works">${ICON.help}</button>
       <button class="icon-btn" data-a="homeMenu" aria-label="More">${ICON.more}</button>
     </div>
@@ -499,6 +595,8 @@ function viewSettings() {
       <div class="field"><label>Payment link or InstaPay address <span class="opt">(optional)</span></label><input class="inp" id="st-ip" value="${esc(p.instapay)}" placeholder="name@instapay or https://ipn.eg/…"><p class="hint" style="margin:6px 2px 0">Filled in for you when you mark an order as delivered.</p></div>
       <button class="btn primary block" data-a="saveSettings">Save</button>
     </div>
+    <div class="card"><div class="row"><div style="flex:1"><b style="font-size:15px">Notifications</b><div class="sub">${N ? (N.notifyAllowed && !N.notifyAllowed() ? 'Turned off for Lamma on this phone.' : 'On. You get them even when Lamma is closed (checked about every 15 minutes).') : 'On iPhone they show inside Lamma: the bell on the home screen and a banner while the app is open.'}</div></div>
+      ${N && N.openNotifySettings ? `<button class="btn sm" style="flex:none" data-a="notifySettings">${N.notifyAllowed && !N.notifyAllowed() ? 'Turn on' : 'Settings'}</button>` : ''}</div></div>
     <div class="card"><div class="field" style="margin:0"><label>Appearance</label><div class="seg">
       ${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([k, l]) => `<button class="${t === k ? 'on' : ''}" data-a="theme" data-v="${k}">${l}</button>`).join('')}</div></div></div>
     <div class="card flush">
@@ -549,18 +647,18 @@ function viewDetails(o) {
     ${o.description ? `<p class="desc" dir="auto">${esc(o.description)}</p>` : ''}
     ${lockLine(o)}
     <div class="info-grid">
-      <div><div class="k">Hosted by</div><div class="v">${esc(host ? 'You' : o.hostName)}</div></div>
+      <div><div class="k">Hosted by</div><div class="v">${hostNames(o).map(n => esc(n)).join(', ')}${isMainHost() ? ' (you)' : ''}</div></div>
       <div><div class="k">Members</div><div class="v">${plural(count, 'member')}</div></div>
       <div><div class="k">Date</div><div class="v">${fmtDate(ts(o.createdAt))}</div></div>
       <div><div class="k">Group Code</div><div class="v code-v">${esc(o.code)} <button class="mini" data-a="copyCode" aria-label="Copy code">${ICON.copy}</button></div></div>
     </div>
     ${linksRow(o)}
     ${!me ? `<div class="card" style="margin-top:16px"><b>You're not in this order.</b><p class="sub">Join it to add your food.</p>${lk ? '<p class="sub" style="margin-top:6px">This order is locked, so new people can\'t join.</p>' : `<button class="btn primary block" style="margin-top:12px" data-a="joinThis">Join this order</button>`}</div></div>` : `
-    ${!host && delivered(o) && r && r.total > 0 ? paymentCard(o, r, me) : ''}
+    ${!isMainHost() && delivered(o) && r && r.total > 0 ? paymentCard(o, r, me) : ''}
     <div class="sec-head"><h3>My Items</h3><span class="caps">${plural(sumQty(me.items || []), 'item')}</span></div>
     ${(me.items || []).length ? placedLine(o, me, r) : ''}
     ${(me.items || []).length ? me.items.map(it => itemCard(o, bill, me, it, canEditMine)).join('') : `<div class="empty-card">${canEditMine ? 'You haven\'t added anything yet. Check the menu, then tap “Add Item”, or tap “Add to my items” on a friend\'s food below.' : 'You didn\'t add any food to this order.'}</div>`}
-    ${!host && !delivered(o) && r && r.sub > 0 ? `<div class="so-far"><span>Your food so far</span><b>${money(r.sub, o.currency)}</b></div><p class="hint">VAT, service and your part of delivery are added when the host marks the order as delivered.</p>` : ''}
+    ${!isMainHost() && !delivered(o) && r && r.sub > 0 ? `<div class="so-far"><span>Your food so far</span><b>${money(r.sub, o.currency)}</b></div><p class="hint">VAT, service and your part of delivery are added when the host marks the order as delivered.</p>` : ''}
     ${host ? offlineCard(o, bill, offline) : ''}
     ${canEditMine ? `<button class="btn primary block big" data-a="itemSheet">${ICON.plus} Add Item</button>` : ''}
     ${host ? `<div class="row two"><button class="btn soft" data-a="screen" data-v="checklist">${ICON.checklist} DELIVERY CHECKLIST</button><button class="btn soft" data-a="exportCsv">${ICON.download} EXPORT EXCEL</button></div>
@@ -571,8 +669,9 @@ function viewDetails(o) {
         : ''}
     <div class="sec-head" style="margin-top:26px"><h3>Who's in</h3><span class="caps">${S.people.length === 1 ? '1 person' : `${S.people.length} people`}</span></div>
     ${host && !appOthers.length ? `<div class="empty-card">Nobody joined yet. Share the invite link or the group code ${esc(o.code)}.<div class="row" style="margin-top:10px"><button class="btn sm primary" data-a="shareInvite">${ICON.share} Share invite</button><button class="btn sm" data-a="copyCode">${ICON.copy} Copy code</button></div></div>` : ''}
+    ${host ? `<p class="hint">As a host you can change anyone's food, prices and notes. Tap ${ICON.edit.replace('<svg', '<svg width="14" height="14"')} on a person.</p>` : ''}
     ${[me, ...appOthers, ...offline].map(p => personCard(o, bill, p, !lk && p.id !== me.id)).join('')}
-    ${!host && !lk ? `<button class="btn block ghost danger" style="margin-top:8px" data-a="leaveOrder">Leave this order</button>` : ''}
+    ${!isMainHost() && !lk ? `<button class="btn block ghost danger" style="margin-top:8px" data-a="leaveOrder">Leave this order</button>` : ''}
     </div>`}`;
 }
 // tells you your food is in the order and who can see it
@@ -619,8 +718,9 @@ function itemCard(o, bill, p, it, editable) {
 function personCard(o, bill, p, canAdd) {
   const items = p.items || [];
   return `<div class="card">
-    <div class="person-head"><div class="initial">${esc(initials(p.name))}</div><div class="grow"><div class="t">${esc(p.name)}${p.id === S.user.uid ? ' <span class="badge accent">You</span>' : ''}${p.id === o.hostUid ? ' <span class="badge">Host</span>' : ''}${p.noApp ? ' <span class="badge">Offline</span>' : ''}</div>
-      <div class="sub">${items.length ? plural(sumQty(items), 'item') : 'Hasn\'t ordered yet'}</div></div></div>
+    <div class="person-head"><div class="initial">${esc(initials(p.name))}</div><div class="grow"><div class="t">${esc(p.name)}${p.id === S.user.uid ? ' <span class="badge accent">You</span>' : ''}${p.id === o.hostUid ? ' <span class="badge">Host</span>' : (o.coHosts || []).includes(p.id) ? ' <span class="badge">Co-host</span>' : ''}${p.noApp ? ' <span class="badge">Offline</span>' : ''}</div>
+      <div class="sub">${items.length ? plural(sumQty(items), 'item') : 'Hasn\'t ordered yet'}</div></div>
+      ${isHost() && p.id !== S.user.uid ? `<button class="mini" data-a="memberSheet" data-id="${p.id}" aria-label="Manage ${esc(p.name)}">${ICON.edit}</button>` : ''}</div>
     ${items.length ? `<div style="margin-top:8px">${items.map(it => {
       const u = bill.unit.item({ ...it, pid: p.id });
       return `<div class="item-line"><span class="q">${qtyOf(it)}×</span>
@@ -857,6 +957,7 @@ async function joinByCode(raw) {
     if (!mine || !mine.exists()) {
       if (locked(od)) return fail('This order is locked, so new people can\'t join.');
       await FB.setDoc(D('orders', oid, 'people', uid), { uid, name: S.profile.name, items: [], joinedAt: Date.now(), updatedAt: Date.now() });
+      notifyUsers(hostsOf(od), { type: 'join', title: `${S.profile.name} joined ${od.place}`, body: 'Tap to see who\'s in and what they order.', orderId: oid });
     }
     await FB.setDoc(D('users', uid, 'joined', oid), { place: od.place, hostName: od.hostName, joinedAt: Date.now() });
     closeSheet();
@@ -1012,7 +1113,7 @@ async function sheetMenu(id) {
 
 /* food items: you edit your own; the host also edits offline members' food */
 const personFor = pid => S.people.find(p => p.id === (pid || S.user.uid));
-const canEditFood = p => !!p && (p.id === S.user.uid ? (isHost() || !locked(S.order)) : (isHost() && p.noApp));
+const canEditFood = p => !!p && (isHost() || (p.id === S.user.uid && !locked(S.order)));
 function sheetItem(itemId, personId) {
   const o = S.order, person = personFor(personId);
   if (!canEditFood(person)) { toast(locked(o) ? 'This order is locked.' : "You can't change someone else's food."); return; }
@@ -1045,12 +1146,20 @@ function sheetExtra(pid, itemId, extraId) {
   if (!ex) setTimeout(() => { const i = $('#ex-name'); if (i) i.focus(); }, 200);
 }
 const writeItems = (pid, items) => FB.updateDoc(D('orders', S.order.id, 'people', pid), { items, updatedAt: Date.now() });
-async function changeItems(pid, fn) {
+async function changeItems(pid, fn, what) {
   const p = personFor(pid);
   if (!canEditFood(p)) { toast(locked(S.order) ? 'This order is locked.' : "You can't change someone else's food."); return false; }
+  const before = (p.items || []).length;
   const items = (p.items || []).map(i => ({ ...i, extras: [...(i.extras || [])] }));
   fn(items);
-  try { await writeItems(p.id, items); return true; }
+  try {
+    await writeItems(p.id, items);
+    const o = S.order;
+    // tell the person when a host changed their food, and the hosts when someone places their first item
+    if (p.id !== S.user.uid && !p.noApp) notifyUsers([p.id], { type: 'edited', title: `${S.profile.name} changed your order`, body: `${o.place}: ${what || 'your items were updated'}. Tap to check.` });
+    if (p.id === S.user.uid && !before && items.length && !isMainHost()) notifyUsers(hostsOf(o), { type: 'placed', title: `${S.profile.name} placed their order`, body: `${o.place}: ${items.map(i => `${qtyOf(i)}× ${i.name}`).join(', ')}` });
+    return true;
+  }
   catch (e) { toast(locked(S.order) ? 'This order is locked.' : 'Could not save. Check your internet.'); return false; }
 }
 
@@ -1109,13 +1218,19 @@ function sheetDeliver() {
   s._mode = mode; s._auto = auto;
 }
 
+// hosts: change anyone's food, rename offline members, and (main host) promote co-hosts
 function sheetPerson(pid) {
-  const p = S.people.find(x => x.id === pid);
-  if (!p || !p.noApp) return;
-  openSheet(`<h2>${esc(p.name)}</h2><p class="sub">Offline member, added by you.</p>
-    <div class="field"><label>Name</label><div class="row"><input class="inp" id="ps-name" value="${esc(p.name)}" style="flex:1"><button class="btn" style="flex:none" data-a="renamePerson" data-id="${p.id}">Rename</button></div></div>
+  const o = S.order, p = S.people.find(x => x.id === pid);
+  if (!p || !isHost()) return;
+  const co = (o.coHosts || []).includes(p.id), main = p.id === o.hostUid;
+  openSheet(`<h2>${esc(p.name)}</h2><p class="sub">${p.noApp ? 'Offline member, added by a host.' : main ? 'Main host' : co ? 'Co-host' : 'Member'}. Tap an item to change it.</p>
+    <div class="card">${(p.items || []).length ? p.items.map(it => `<div class="item-line tap" data-a="itemSheet" data-p="${p.id}" data-id="${it.id}"><span class="q">${qtyOf(it)}×</span><span class="grow" dir="auto">${esc(it.name)}${(it.extras || []).length ? `<span class="note">+ ${it.extras.map(e => esc(e.name)).join(', ')}</span>` : ''}${it.note ? `<span class="note" dir="auto">${esc(it.note)}</span>` : ''}</span><span class="chev">${ICON.edit.replace('<svg', '<svg width="16" height="16"')}</span></div>`).join('') : '<p class="sub">No food yet.</p>'}</div>
     <button class="btn primary block" data-a="itemSheet" data-p="${p.id}">${ICON.plus} Add food for ${esc(p.name)}</button>
-    <button class="btn block ghost danger" style="margin-top:6px" data-a="removePerson" data-id="${p.id}">Remove ${esc(p.name)} from the order</button>`);
+    ${p.noApp ? `<div class="field" style="margin-top:14px"><label>Name</label><div class="row"><input class="inp" id="ps-name" value="${esc(p.name)}" style="flex:1"><button class="btn" style="flex:none" data-a="renamePerson" data-id="${p.id}">Rename</button></div></div>` : ''}
+    ${isMainHost() && !p.noApp && !main ? (co
+      ? `<button class="btn block" style="margin-top:10px" data-a="coHost" data-id="${p.id}" data-v="0">${ICON.crown} Remove as co-host</button>`
+      : `<button class="btn block" style="margin-top:10px" data-a="coHost" data-id="${p.id}" data-v="1">${ICON.crown} Make co-host</button><p class="hint" style="margin-top:6px">A co-host can lock the order, change anyone's food and prices, and mark it as delivered, just like you.</p>`) : ''}
+    ${!main && (p.noApp || isMainHost()) ? `<button class="btn block ghost danger" style="margin-top:6px" data-a="removePerson" data-id="${p.id}">Remove ${esc(p.name)} from the order</button>` : ''}`);
 }
 function sheetAddPerson() {
   openSheet(`<h2>Add Member</h2><p class="sub">For someone who doesn't have Lamma. You add their food for them, and they're included in the split.</p>
@@ -1148,10 +1263,10 @@ function sheetOrderMenu() {
     ${row('shareInvite', 'Share invite link', `Group code ${esc(o.code)}`)}
     ${host ? `${row('editOrder', 'Edit order', 'Name, description, deadline, menu and photos')}
       ${!delivered(o) ? (locked(o) ? row('unlock', 'Unlock order', 'Friends can change their food again.') : row('lockSheet', 'Lock order', o.lockAt ? `Locks by itself ${fmtWhen(o.lockAt)}` : 'Now or at a deadline')) : ''}
-      ${row('screenFromMenu', 'Set item prices', 'Change any price; the food stays as ordered')}
+      ${row('screenFromMenu', 'Set item prices', 'Change the price of any food or extra')}
       ${row('shareBill', 'Share the bill in a chat')}
       ${delivered(o) ? row('undeliver', 'Undo delivered', 'Back to ordering, still locked') : ''}
-      ${row('deleteOrder', 'Delete the order', '', true)}`
+      ${isMainHost() ? row('deleteOrder', 'Delete the order', '', true) : !locked(o) ? row('leaveOrder', 'Leave this order', 'Your food will be removed.', true) : ''}`
       : `${S.me && !locked(o) ? row('leaveOrder', 'Leave this order', 'Your food will be removed.', true) : ''}`}
   </div>`);
 }
@@ -1208,6 +1323,14 @@ const A = {
   google: () => googleSignIn(),
   homeTab: el => { S.homeTab = el.dataset.v; if (S.view !== 'home') S.view = 'home'; render(); window.scrollTo(0, 0); },
   go: el => { closeSheet(); S.view = el.dataset.v; render(); window.scrollTo(0, 0); },
+  openNote: el => {
+    const x = S.inbox.find(n => n.id === el.dataset.id);
+    if (el.classList.contains('banner')) el.remove();
+    if (!x) return;
+    if (!x.read) FB.updateDoc(D('users', S.user.uid, 'inbox', x.id), { read: true }).catch(() => { });
+    if (x.orderId) openOrder(x.orderId);
+  },
+  readAll: () => { const b = FB.writeBatch(db); S.inbox.filter(x => !x.read).forEach(x => b.update(D('users', S.user.uid, 'inbox', x.id), { read: true })); b.commit().catch(() => { }); },
   helpSheet: () => sheetHelp(),
   homeMenu: () => sheetHomeMenu(),
   home: () => goHome(),
@@ -1264,12 +1387,16 @@ const A = {
 
   /* lock */
   lockSheet: () => { closeSheet(); sheetLock(); },
-  lockNow: async () => { await upd({ open: false }); closeSheet(); toast('Order locked'); },
+  lockNow: async () => {
+    await upd({ open: false }); closeSheet(); toast('Order locked');
+    notifyMembers({ type: 'locked', title: `${S.order.place} is locked`, body: `${S.profile.name} locked the order. Food can't be added or changed now.` });
+  },
   lockIn: el => { $('#lk-at').value = toLocalInput(Date.now() + +el.dataset.v * 60000); },
   setDeadline: async () => {
     const r = readLockInput('#lk-at');
     if (r.error || !r.lockAt) { $('#lk-err').textContent = r.error || 'Pick a time.'; return; }
     await upd({ lockAt: r.lockAt, open: true }); closeSheet(); toast(`The order locks ${fmtWhen(r.lockAt)}`);
+    notifyMembers({ type: 'deadline', title: `Add your food before ${fmtTime(r.lockAt)}`, body: `${S.order.place} locks ${fmtWhen(r.lockAt)}.` });
   },
   clearDeadline: async () => { await upd({ lockAt: null }); closeSheet(); toast('Deadline removed'); },
   unlock: async () => {
@@ -1277,6 +1404,7 @@ const A = {
     const o = S.order;
     await upd({ open: true, ...(deadlinePassed(o) ? { lockAt: null } : {}) });
     toast('Order unlocked. Friends can change their food again.');
+    notifyMembers({ type: 'unlocked', title: `${o.place} is open again`, body: 'You can add or change your food.' });
   },
 
   /* delivered */
@@ -1304,6 +1432,9 @@ const A = {
     const bill = computeBill(S.order, S.people);
     if (bill.missing && !confirm(`${plural(bill.missing, 'price')} still missing and will count as 0. Deliver anyway?`)) return;
     await upd({ stage: 'delivered', open: false, deliveredAt: Date.now() });
+    const o = S.order;
+    for (const r of bill.rows) if (!r.p.noApp && r.p.id !== o.hostUid && r.total > 0)
+      notifyUsers([r.p.id], { type: 'delivered', title: `${o.place} was delivered`, body: `You owe ${money(r.total, o.currency)}. Tap to see the breakdown and pay ${o.hostName}.`, amount: Math.round(r.total * 100) / 100 });
     S.delivering = false; showScreen('details');
     toast('Order delivered. Everyone can see what they owe.');
   },
@@ -1315,7 +1446,15 @@ const A = {
   copyNote: () => copy(S.order.hostNote),
   markPaid: async el => {
     const v = el.dataset.v === '1';
-    try { await FB.updateDoc(D('orders', S.order.id, 'people', S.user.uid), { paid: v }); if (v) toast('Marked as paid. The host will see it.'); }
+    try {
+      await FB.updateDoc(D('orders', S.order.id, 'people', S.user.uid), { paid: v });
+      if (v) {
+        toast('Marked as paid. The host will see it.');
+        const o = S.order, r = computeBill(o, S.people).rows.find(x => x.p.id === S.user.uid);
+        notifyUsers(hostsOf(o), { type: 'paid', title: `${S.profile.name} paid`, body: `${o.place}: ${r ? money(r.total, o.currency) : ''} marked as paid. Check it in the Delivery Checklist.` });
+        if (N && N.cancel) N.cancel('pay-' + o.id);
+      }
+    }
     catch (e) { toast('Could not save. Check your internet.'); }
   },
 
@@ -1323,6 +1462,11 @@ const A = {
   tick: el => { const p = S.people.find(x => x.id === el.dataset.id), k = el.dataset.k; FB.updateDoc(D('orders', S.order.id, 'people', p.id), { [k]: !p[k] }).catch(() => toast('Could not save')); },
   remind: el => {
     const o = S.order, r = computeBill(o, S.people).rows.find(x => x.p.id === el.dataset.id);
+    if (!r.p.noApp) {
+      notifyUsers([r.p.id], { type: 'reminder', title: `Payment reminder: ${money(r.total, o.currency)}`, body: `For ${o.place}. Tap to pay ${o.hostName}.` });
+      toast(`Reminder sent to ${r.p.name}`);
+      return;
+    }
     share(`Hi ${r.p.name}, your share of the ${o.place} order is ${money(r.total, o.currency)}.${o.paymentUrl && o.paymentMode !== 'note' ? `\nPay here: ${o.paymentUrl}` : ''}\nThanks!`);
   },
   priceSheet: el => sheetPrice(el.dataset.p, el.dataset.id),
@@ -1330,6 +1474,8 @@ const A = {
     const s = $('.sheet'), v = $('#pr-v').value.trim();
     await upd({ itemPrices: { ...(S.order.itemPrices || {}), [itemKey(s._pid, s._itemId)]: v === '' ? null : num(v) } });
     closeSheet();
+    const p = personFor(s._pid), it = p && (p.items || []).find(i => i.id === s._itemId);
+    if (p && it && v !== '' && !p.noApp) notifyUsers([p.id], { type: 'price', title: `Price changed: ${it.name}`, body: `${S.profile.name} set it to ${money(num(v), S.order.currency)} in ${S.order.place}.` });
   },
   clearPrice: async () => {
     const s = $('.sheet'), ip = { ...(S.order.itemPrices || {}) };
@@ -1337,6 +1483,15 @@ const A = {
     await upd({ itemPrices: ip }); closeSheet();
   },
   personSheet: el => sheetPerson(el.dataset.id),
+  memberSheet: el => sheetPerson(el.dataset.id),
+  coHost: async el => {
+    const o = S.order, p = S.people.find(x => x.id === el.dataset.id), on = el.dataset.v === '1';
+    await upd({ coHosts: on ? FB.arrayUnion(p.id) : FB.arrayRemove(p.id) });
+    closeSheet();
+    toast(on ? `${p.name} is now a co-host` : `${p.name} is no longer a co-host`);
+    notifyUsers([p.id], on ? { type: 'cohost', title: `You're now a co-host of ${o.place}`, body: `${S.profile.name} made you a host. You can lock the order, change food and prices, and mark it as delivered.` }
+      : { type: 'cohost', title: `You're no longer a co-host of ${o.place}`, body: `${S.profile.name} changed the hosts.` });
+  },
   addPerson: () => sheetAddPerson(),
   saveNewPerson: async () => {
     const name = $('#ap-name').value.trim(); if (!name) return;
@@ -1346,7 +1501,8 @@ const A = {
   renamePerson: async el => { const name = $('#ps-name').value.trim(); if (!name) return; await FB.updateDoc(D('orders', S.order.id, 'people', el.dataset.id), { name }); closeSheet(); },
   removePerson: async el => {
     const p = S.people.find(x => x.id === el.dataset.id);
-    if (!p || !p.noApp || !confirm(`Remove ${p.name} and their food from this order?`)) return;
+    if (!p || !(p.noApp || isMainHost()) || !confirm(`Remove ${p.name} and their food from this order?`)) return;
+    if (!p.noApp) { notifyUsers([p.id], { type: 'removed', title: `You were removed from ${S.order.place}`, body: `${S.profile.name} removed you from the order.` }); upd({ coHosts: FB.arrayRemove(p.id) }); }
     await FB.deleteDoc(D('orders', S.order.id, 'people', p.id));
     await upd({ shared: (S.order.shared || []).map(s => ({ ...s, sharers: (s.sharers || []).filter(x => x !== p.id) })) });
     closeSheet();
@@ -1377,10 +1533,13 @@ const A = {
     if (ok) sheetPlaced(it.name);
   },
   qty: el => { const v = $('#it-qty'); v.textContent = Math.max(1, Math.min(99, +v.textContent + +el.dataset.v)); },
-  itemQty: el => changeItems(el.dataset.p, items => {
-    const it = items.find(i => i.id === el.dataset.id);
-    if (it) it.qty = Math.max(1, Math.min(99, qtyOf(it) + +el.dataset.v));
-  }),
+  itemQty: el => {
+    const p = personFor(el.dataset.p), it0 = p && (p.items || []).find(i => i.id === el.dataset.id);
+    return changeItems(el.dataset.p, items => {
+      const it = items.find(i => i.id === el.dataset.id);
+      if (it) it.qty = Math.max(1, Math.min(99, qtyOf(it) + +el.dataset.v));
+    }, it0 ? `${it0.name} quantity changed` : '');
+  },
   saveItem: async () => {
     const s = $('.sheet'), name = $('#it-name').value.trim();
     if (!name) { $('#it-name').focus(); return; }
@@ -1389,13 +1548,13 @@ const A = {
     const ok = await changeItems(s._pid, items => {
       if (s._itemId) { const i = items.findIndex(x => x.id === s._itemId); if (i >= 0) items[i] = { ...items[i], ...data }; }
       else items.push({ id: rid(8), ...data, extras: [] });
-    });
+    }, `${s._itemId ? 'changed' : 'added'} ${data.qty}× ${name}`);
     if (ok) { if (s._itemId) { closeSheet(); toast('Saved'); } else if (s._pid === S.user.uid) sheetPlaced(name); else { closeSheet(); toast(`Added ${name}`); } }
   },
   deleteItem: async el => {
     const p = personFor(el.dataset.p), it = p && (p.items || []).find(i => i.id === el.dataset.id);
     if (!it || !confirm(`Remove ${it.name}?`)) return;
-    if (await changeItems(p.id, items => items.splice(items.findIndex(i => i.id === it.id), 1))) closeSheet();
+    if (await changeItems(p.id, items => items.splice(items.findIndex(i => i.id === it.id), 1), `removed ${it.name}`)) closeSheet();
   },
   extraSheet: el => sheetExtra(el.dataset.p, el.dataset.id, el.dataset.x || null),
   saveExtra: async () => {
@@ -1407,7 +1566,7 @@ const A = {
       const it = items.find(i => i.id === s._itemId); if (!it) return;
       if (s._extraId) { const i = it.extras.findIndex(x => x.id === s._extraId); if (i >= 0) it.extras[i] = { ...it.extras[i], ...data }; }
       else it.extras.push({ id: rid(8), ...data, byName: S.profile.name });
-    });
+    }, `extra ${name}`);
     if (ok) closeSheet();
   },
   deleteExtra: el => changeItems(el.dataset.p, items => {
@@ -1418,6 +1577,7 @@ const A = {
     if (!confirm('Leave this order? Your food will be removed.')) return;
     closeSheet();
     const uid = S.user.uid, id = S.order.id;
+    notifyUsers(hostsOf(S.order), { type: 'left', title: `${S.profile.name} left ${S.order.place}`, body: 'Their food was removed from the order.' });
     await FB.deleteDoc(D('orders', id, 'people', uid)).catch(() => { });
     await FB.deleteDoc(D('users', uid, 'joined', id)).catch(() => { });
     goHome();
@@ -1483,6 +1643,7 @@ const A = {
     for (const o of S.hosted) if (!delivered(o)) FB.updateDoc(D('orders', o.id), { hostName: name }).catch(() => { });
     toast('Saved');
   },
+  notifySettings: () => N.openNotifySettings(),
   theme: el => { try { localStorage.setItem('lamma.theme', el.dataset.v); } catch (e) { } applyTheme(); render(); },
   signOut: () => { if (confirm('Sign out of Lamma?')) FB.signOut(auth); },
 };
