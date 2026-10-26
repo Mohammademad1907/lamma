@@ -349,3 +349,12 @@ textarea.inp.area { height: auto; min-height: 64px; padding: 12px 14px; resize: 
 @keyframes pop { from { transform: scale(.6); opacity: 0; } }
 .grab-zone { margin: -8px -16px 4px; padding: 10px 0 10px; touch-action: none; cursor: grab; }
 .grab-zone .grab { width: 44px; height: 5px; margin: 0 auto; }
+/* keep everything inside the screen width (iPhone Safari lets wide date fields push the page sideways) */
+html, body { overflow-x: hidden; max-width: 100%; overscroll-behavior-x: none; }
+#app, .page, .sheet { max-width: 100%; }
+.sheet { overflow-x: hidden; overscroll-behavior: contain; touch-action: pan-y; }
+@media (min-width: 600px) { .sheet { max-width: 600px; } }
+.inp, select, textarea { min-width: 0; max-width: 100%; }
+input[type="datetime-local"].inp { -webkit-appearance: none; appearance: none; display: flex; align-items: center; width: 100%; min-width: 0; text-align: left; }
+input[type="datetime-local"].inp::-webkit-date-and-time-value { text-align: left; }
+.grid2 > * { min-width: 0; }
