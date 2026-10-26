@@ -1,5 +1,5 @@
 rules_version = '2';
-// Lamma security rules: people in an order see each other's food; each edits only their own, the host edits all.
+// Lamma security rules: people in an order see each other's food; each edits only their own, the host edits prices and ticks but not other people's food.
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
@@ -39,15 +39,25 @@ service cloud.firestore {
 
       match /people/{pid} {
         function isHost() { return orderData(oid).hostUid == me(); }
-        function isOpen() { return orderData(oid).open == true; }
+        // open: not locked by the host, the deadline (lockAt, in ms) has not passed, not delivered
+        function isOpen() {
+          let o = orderData(oid);
+          return o.open == true && o.get('stage', 'open') != 'delivered' &&
+            (o.get('lockAt', null) == null || request.time.toMillis() < o.lockAt);
+        }
+        function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
         // everyone who joined the order can see who's in and what they ordered
         allow read: if signedIn() && (pid == me() || isHost() ||
           exists(/databases/$(database)/documents/orders/$(oid)/people/$(me())));
-        allow create: if signedIn() && (isHost() ||
+        allow create: if signedIn() && (
+          (isHost() && (pid == me() || request.resource.data.get('noApp', false) == true)) ||
           (pid == me() && isOpen() && request.resource.data.keys().hasOnly(['uid', 'name', 'items', 'joinedAt', 'updatedAt'])));
-        allow update: if signedIn() && (isHost() ||
-          (pid == me() && isOpen() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'items', 'updatedAt'])));
-        allow delete: if signedIn() && (isHost() || pid == me());
+        // the host can tick paid / got food on anyone, but only changes the food of offline members and their own
+        allow update: if signedIn() && (
+          (isHost() && (pid == me() || resource.data.get('noApp', false) == true || changed().hasOnly(['paid', 'received', 'bill']))) ||
+          (pid == me() && isOpen() && changed().hasOnly(['name', 'items', 'updatedAt'])) ||
+          (pid == me() && changed().hasOnly(['paid'])));
+        allow delete: if signedIn() && (isHost() || (pid == me() && isOpen()));
       }
     }
   }
