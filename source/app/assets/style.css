@@ -347,3 +347,5 @@ textarea.inp.area { height: auto; min-height: 64px; padding: 12px 14px; resize: 
 .placed-big > svg { width: 64px; height: 64px; color: var(--good); stroke-width: 1.6; margin-bottom: 8px; animation: pop .35s ease-out; }
 .placed-big h2 { margin-bottom: 6px; }
 @keyframes pop { from { transform: scale(.6); opacity: 0; } }
+.grab-zone { margin: -8px -16px 4px; padding: 10px 0 10px; touch-action: none; cursor: grab; }
+.grab-zone .grab { width: 44px; height: 5px; margin: 0 auto; }

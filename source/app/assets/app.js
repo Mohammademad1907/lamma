@@ -5,7 +5,7 @@ const CFG = window.LAMMA_CONFIG;
 const N = window.LammaNative || null;
 const F = window.Fuzzy;
 const FB = window.FB;
-const VERSION = '2.4';
+const VERSION = '2.5';
 const CURRENCIES = ['EGP', 'SAR', 'AED', 'KWD', 'QAR', 'USD', 'EUR', 'GBP'];
 const MAX_PHOTOS = 10;
 const USER_DOMAIN = 'users.lamma.app';
@@ -795,10 +795,43 @@ function refreshPrices() {
 /* ---------------- sheets ---------------- */
 function openSheet(html) {
   const root = $('#sheet-root');
-  root.innerHTML = `<div class="backdrop" data-a="closeSheet"></div><div class="sheet" role="dialog"><div class="grab"></div>${html}</div>`;
+  root.innerHTML = `<div class="backdrop" data-a="closeSheet"></div><div class="sheet" role="dialog"><div class="grab-zone" data-a="closeSheet" aria-label="Close"><div class="grab"></div></div>${html}</div>`;
   return $('.sheet', root);
 }
 function closeSheet() { $('#sheet-root').innerHTML = ''; }
+// drag a sheet down to close it: from the bar on top, or anywhere once the sheet is scrolled to the top
+(function dragToClose() {
+  let sh = null, y0 = 0, dy = 0, t0 = 0, active = false;
+  document.addEventListener('touchstart', e => {
+    const el = e.target.closest && e.target.closest('.sheet');
+    if (!el || e.touches.length !== 1) return;
+    const onBar = !!e.target.closest('.grab-zone');
+    if (!onBar && (el.scrollTop > 0 || e.target.closest('input, textarea, select, .photos, .chips'))) return;
+    sh = el; y0 = e.touches[0].clientY; dy = 0; t0 = Date.now(); active = onBar;
+  }, { passive: true });
+  document.addEventListener('touchmove', e => {
+    if (!sh) return;
+    dy = e.touches[0].clientY - y0;
+    if (!active) { if (dy > 8 && sh.scrollTop <= 0) active = true; else if (dy < -4) { sh = null; return; } else return; }
+    if (e.cancelable) e.preventDefault();
+    sh.style.transition = 'none';
+    sh.style.transform = `translateY(${Math.max(0, dy)}px)`;
+    const bd = $('.backdrop'); if (bd) bd.style.opacity = String(Math.max(0.2, 1 - dy / 400));
+  }, { passive: false });
+  document.addEventListener('touchend', () => {
+    if (!sh) return;
+    const el = sh; sh = null;
+    if (!active) return;
+    const fast = dy > 40 && Date.now() - t0 < 250;
+    if (dy > 110 || fast) {
+      el.style.transition = 'transform .18s ease-in'; el.style.transform = 'translateY(100%)';
+      setTimeout(() => { if (el.isConnected) closeSheet(); }, 170);
+    } else {
+      el.style.transition = 'transform .2s ease-out'; el.style.transform = '';
+      const bd = $('.backdrop'); if (bd) bd.style.opacity = '';
+    }
+  });
+})();
 
 function sheetJoin() {
   openSheet(`<h2>Join an order</h2><p class="sub">Type the 6-letter group code your friend sent you, or paste their invite link.</p>
