@@ -5,7 +5,7 @@ const CFG = window.LAMMA_CONFIG;
 const N = window.LammaNative || null;
 const F = window.Fuzzy;
 const FB = window.FB;
-const VERSION = '2.3';
+const VERSION = '2.4';
 const CURRENCIES = ['EGP', 'SAR', 'AED', 'KWD', 'QAR', 'USD', 'EUR', 'GBP'];
 const MAX_PHOTOS = 10;
 const USER_DOMAIN = 'users.lamma.app';
@@ -322,6 +322,8 @@ FB.onAuthStateChanged(auth, async user => {
     rerenderHome();
   }));
   S.view = 'home'; render();
+  // after a refresh, open the order you were looking at
+  if (WEB && savedOrder() && !S.pendingCode) openOrder(savedOrder());
   if (S.pendingCode) { const c = S.pendingCode; S.pendingCode = null; joinByCode(c); }
 });
 
@@ -342,8 +344,21 @@ window.lammaBack = () => {
   return false;
 };
 
+/* In the browser (iPhone), the back button / back swipe moves back inside Lamma instead of leaving it:
+   one extra history entry sits on top, and each back press is caught and turned into an in-app back. */
+const WEB = !N;
+const remember = () => { if (WEB) try { history.replaceState(history.state, '', S.view === 'order' && S.order ? `#o=${S.order.id}` : location.pathname + location.search); } catch (e) { } };
+if (WEB) {
+  try { if (!history.state || !history.state.lammaTop) { history.replaceState({ lammaBase: 1 }, ''); history.pushState({ lammaTop: 1 }, ''); } } catch (e) { }
+  window.addEventListener('popstate', () => {
+    if (window.lammaBack()) { try { history.pushState({ lammaTop: 1 }, ''); } catch (e) { } remember(); }
+    else history.back();
+  });
+}
+const savedOrder = () => (location.hash.match(/^#o=([A-Za-z0-9]+)/) || [])[1];
+
 /* ---------------- navigation ---------------- */
-function goHome() { stop('order'); S.view = 'home'; S.order = null; S.people = []; S.me = null; render(); window.scrollTo(0, 0); }
+function goHome() { stop('order'); S.view = 'home'; S.order = null; S.people = []; S.me = null; render(); remember(); window.scrollTo(0, 0); }
 function showScreen(k) { S.screen = k; if (k !== 'prices') S.delivering = false; render(); window.scrollTo(0, 0); }
 const sortPeople = (docs, uid) => docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.id === uid) - (a.id === uid) || ts(a.joinedAt) - ts(b.joinedAt));
 let lockTimer = null;
@@ -355,7 +370,9 @@ function openOrder(id) {
   let child = false;
   subs.order.push(FB.onSnapshot(D('orders', id), s => {
     if (!s.exists()) { S.orderMissing = true; S.order = null; render(); return; }
+    const first = !S.order;
     S.order = { id: s.id, ...s.data() };
+    if (first) remember();
     // redraw the moment the deadline passes
     clearTimeout(lockTimer);
     const o = S.order;
@@ -1471,4 +1488,4 @@ document.addEventListener('input', e => {
 
 applyTheme();
 // the web version (iPhone) gets invite links as ?c=CODE in its own address
-if (!N && /[?&]c=/.test(location.search)) { handleLink(location.href); history.replaceState(null, '', location.pathname); }
+if (!N && /[?&]c=/.test(location.search)) { handleLink(location.href); history.replaceState(history.state, '', location.pathname); }

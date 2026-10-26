@@ -1,0 +1,43 @@
+// Browser back button stays inside Lamma (web/iPhone version).
+const { chromium } = require('playwright');
+const path = require('path'), fs = require('fs'), http = require('http');
+const ROOT = path.resolve(__dirname, '../app/assets');
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json' };
+const server = http.createServer((req, res) => {
+  const f = path.join(ROOT, decodeURIComponent(req.url.split('?')[0]).replace(/^\/+/, '') || 'index.html');
+  fs.readFile(f, (e, d) => { if (e) { res.writeHead(404); res.end(); return; } res.writeHead(200, { 'Content-Type': TYPES[path.extname(f)] || 'application/octet-stream' }); res.end(d); });
+});
+(async () => {
+  await new Promise(r => server.listen(5173, '127.0.0.1', r));
+  await fetch('http://127.0.0.1:8080/emulator/v1/projects/demo-lamma/databases/(default)/documents', { method: 'DELETE' });
+  await fetch('http://127.0.0.1:9099/emulator/v1/projects/demo-lamma/accounts', { method: 'DELETE' });
+  const b = await chromium.launch();
+  const p = await (await b.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+  p.on('pageerror', e => console.log('pageerror', e.message));
+  await p.goto('about:blank');
+  await p.goto('http://127.0.0.1:5173/index.html');
+  await p.waitForSelector('#au-user');
+  await p.click('[data-a="authMode"][data-v="signup"]');
+  await p.fill('#au-name', 'Emad'); await p.fill('#au-user', 'emad'); await p.fill('#au-pass', 'secret123');
+  await p.click('#au-go'); await p.waitForSelector('.htabs');
+  await p.click('.fab'); await p.fill('#od-place', 'KFC'); await p.click('#od-go');
+  await p.waitForSelector('.code-v');
+  const r = {};
+  await p.click('[data-a="itemSheet"].big'); await p.waitForTimeout(300);
+  await p.goBack(); await p.waitForTimeout(500);
+  r.backClosesSheet = (await p.locator('.sheet').count()) === 0 && (await p.locator('.code-v').count()) === 1;
+  await p.click('[data-a="screen"][data-v="checklist"]'); await p.waitForTimeout(300);
+  await p.goBack(); await p.waitForTimeout(500);
+  r.backToDetails = (await p.locator('.code-v').count()) === 1;
+  console.log('before reload', p.url(), await p.evaluate(() => history.length)); await p.reload(); await p.waitForSelector('.code-v', { timeout: 10000 }).catch(() => { });
+  r.refreshKeepsOrder = (await p.locator('.code-v').count()) === 1;
+  await p.goBack(); await p.waitForTimeout(800);
+  r.backToHome = (await p.locator('.htabs').count()) === 1 && p.url().startsWith('http://127.0.0.1');
+  console.log(r, p.url()); await p.click('[data-a="homeMenu"]'); await p.click('[data-a="go"][data-v="settings"]'); await p.waitForTimeout(300);
+  await p.goBack(); await p.waitForTimeout(500);
+  r.settingsBack = (await p.locator('.htabs').count()) === 1;
+  await p.goBack(); await p.waitForTimeout(800);
+  r.leavesAtHome = p.url();
+  console.log(r);
+  await b.close(); server.close();
+})().catch(e => { console.error(e); server.close(); process.exit(1); });
