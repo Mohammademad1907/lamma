@@ -283,7 +283,8 @@ body { padding-top: env(safe-area-inset-top); }
 .row.two .btn { flex: 1; padding: 0 8px; }
 .sep { border: 0; border-top: 1px solid var(--line); margin: 4px 0 14px; }
 .item-line { align-items: center; }
-.add-mine { height: 30px !important; padding: 0 10px !important; font-size: 12.5px !important; letter-spacing: 0 !important; flex: none; }
+.add-mine { display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; padding: 5px 10px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-size: 13px; font-weight: 600; }
+.add-mine svg { width: 14px; height: 14px; stroke-width: 2.5; }
 
 .pay-card { background: var(--info-soft); border: 1px solid var(--info-line); border-radius: 18px; padding: 16px; margin: 18px 0 8px; }
 .pc-head { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 500; }
@@ -339,3 +340,10 @@ body { padding-top: env(safe-area-inset-top); }
 textarea.inp.area { height: auto; min-height: 64px; padding: 12px 14px; resize: vertical; line-height: 1.4; }
 .list-row > svg { color: var(--muted); flex: none; }
 [hidden] { display: none !important; }
+.placed { display: flex; gap: 10px; align-items: flex-start; background: var(--good-soft); color: var(--text); border-radius: 14px; padding: 12px 14px; margin-bottom: 12px; font-size: 14.5px; }
+.placed > svg { width: 22px; height: 22px; color: var(--good); flex: none; margin-top: 1px; }
+.placed b { color: var(--good); }
+.placed-big { text-align: center; padding: 8px 4px 18px; }
+.placed-big > svg { width: 64px; height: 64px; color: var(--good); stroke-width: 1.6; margin-bottom: 8px; animation: pop .35s ease-out; }
+.placed-big h2 { margin-bottom: 6px; }
+@keyframes pop { from { transform: scale(.6); opacity: 0; } }

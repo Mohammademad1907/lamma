@@ -5,7 +5,7 @@ const CFG = window.LAMMA_CONFIG;
 const N = window.LammaNative || null;
 const F = window.Fuzzy;
 const FB = window.FB;
-const VERSION = '2.2';
+const VERSION = '2.3';
 const CURRENCIES = ['EGP', 'SAR', 'AED', 'KWD', 'QAR', 'USD', 'EUR', 'GBP'];
 const MAX_PHOTOS = 10;
 const USER_DOMAIN = 'users.lamma.app';
@@ -541,6 +541,7 @@ function viewDetails(o) {
     ${!me ? `<div class="card" style="margin-top:16px"><b>You're not in this order.</b><p class="sub">Join it to add your food.</p>${lk ? '<p class="sub" style="margin-top:6px">This order is locked, so new people can\'t join.</p>' : `<button class="btn primary block" style="margin-top:12px" data-a="joinThis">Join this order</button>`}</div></div>` : `
     ${!host && delivered(o) && r && r.total > 0 ? paymentCard(o, r, me) : ''}
     <div class="sec-head"><h3>My Items</h3><span class="caps">${plural(sumQty(me.items || []), 'item')}</span></div>
+    ${(me.items || []).length ? placedLine(o, me, r) : ''}
     ${(me.items || []).length ? me.items.map(it => itemCard(o, bill, me, it, canEditMine)).join('') : `<div class="empty-card">${canEditMine ? 'You haven\'t added anything yet. Check the menu, then tap “Add Item”, or tap “Add to my items” on a friend\'s food below.' : 'You didn\'t add any food to this order.'}</div>`}
     ${!host && !delivered(o) && r && r.sub > 0 ? `<div class="so-far"><span>Your food so far</span><b>${money(r.sub, o.currency)}</b></div><p class="hint">VAT, service and your part of delivery are added when the host marks the order as delivered.</p>` : ''}
     ${host ? offlineCard(o, bill, offline) : ''}
@@ -551,11 +552,25 @@ function viewDetails(o) {
           : `${lk ? `<button class="btn block big outline" data-a="unlock">${ICON.unlock} Unlock Order</button>` : `<button class="btn block big outline" data-a="lockSheet">${ICON.lock} Lock Order</button>`}
              <button class="btn primary block big" data-a="deliverSheet">${ICON.truck} Mark as Delivered</button>`}`
         : ''}
-    <div class="sec-head" style="margin-top:26px"><h3>${host ? 'Members' : 'Who\'s in'}</h3><span class="caps">${plural(appOthers.length + (host ? 0 : offline.length), 'person').replace('persons', 'people')}</span></div>
+    <div class="sec-head" style="margin-top:26px"><h3>Who's in</h3><span class="caps">${S.people.length === 1 ? '1 person' : `${S.people.length} people`}</span></div>
     ${host && !appOthers.length ? `<div class="empty-card">Nobody joined yet. Share the invite link or the group code ${esc(o.code)}.<div class="row" style="margin-top:10px"><button class="btn sm primary" data-a="shareInvite">${ICON.share} Share invite</button><button class="btn sm" data-a="copyCode">${ICON.copy} Copy code</button></div></div>` : ''}
-    ${[...appOthers, ...(host ? [] : offline)].map(p => personCard(o, bill, p, !lk && !!me)).join('')}
+    ${[me, ...appOthers, ...offline].map(p => personCard(o, bill, p, !lk && p.id !== me.id)).join('')}
     ${!host && !lk ? `<button class="btn block ghost danger" style="margin-top:8px" data-a="leaveOrder">Leave this order</button>` : ''}
     </div>`}`;
+}
+// tells you your food is in the order and who can see it
+function placedLine(o, me, r) {
+  const n = sumQty(me.items || []);
+  const when = delivered(o) ? 'The order was delivered.' : locked(o) ? 'The order is locked, so it can\'t change now.'
+    : o.lockAt ? `You can change it until ${fmtWhen(o.lockAt)}.` : 'You can change it until the host locks the order.';
+  return `<div class="placed">${ICON.checkCircle}<div><b>Your order is placed</b><div class="sub">${plural(n, 'item')}${r && r.sub > 0 ? ` · ${money(r.sub, o.currency)}` : ''}. ${o.hostUid === S.user.uid ? 'Everyone in the order can see it.' : `${esc(o.hostName)} and everyone in the order can see it.`} ${when}</div></div></div>`;
+}
+function sheetPlaced(name) {
+  const o = S.order, me = S.me;
+  openSheet(`<div class="placed-big">${ICON.checkCircle}<h2>Order placed</h2>
+    <p class="sub"><b dir="auto">${esc(name)}</b> is in your order${me ? ` (${plural(sumQty(me.items || []), 'item')} now)` : ''}. ${o.hostUid === S.user.uid ? 'Everyone in the order can see it.' : `${esc(o.hostName)} can see it in the order.`}</p></div>
+    <button class="btn primary block" data-a="closeSheet">Done</button>
+    ${!locked(o) ? `<button class="btn block ghost" style="margin-top:6px" data-a="itemSheet">${ICON.plus} Add another item</button>` : ''}`);
 }
 function itemCard(o, bill, p, it, editable) {
   const u = bill.unit.item({ ...it, pid: p.id });
@@ -587,14 +602,13 @@ function itemCard(o, bill, p, it, editable) {
 function personCard(o, bill, p, canAdd) {
   const items = p.items || [];
   return `<div class="card">
-    <div class="person-head"><div class="initial">${esc(initials(p.name))}</div><div class="grow"><div class="t">${esc(p.name)}${p.id === o.hostUid ? ' <span class="badge">Host</span>' : ''}${p.noApp ? ' <span class="badge">Offline</span>' : ''}</div>
+    <div class="person-head"><div class="initial">${esc(initials(p.name))}</div><div class="grow"><div class="t">${esc(p.name)}${p.id === S.user.uid ? ' <span class="badge accent">You</span>' : ''}${p.id === o.hostUid ? ' <span class="badge">Host</span>' : ''}${p.noApp ? ' <span class="badge">Offline</span>' : ''}</div>
       <div class="sub">${items.length ? plural(sumQty(items), 'item') : 'Hasn\'t ordered yet'}</div></div></div>
     ${items.length ? `<div style="margin-top:8px">${items.map(it => {
       const u = bill.unit.item({ ...it, pid: p.id });
       return `<div class="item-line"><span class="q">${qtyOf(it)}×</span>
-        <span class="grow" dir="auto">${esc(it.name)}${(it.extras || []).length ? `<span class="note">+ ${it.extras.map(e => esc(e.name)).join(', ')}</span>` : ''}${it.note ? `<span class="note" dir="auto">${esc(it.note)}</span>` : ''}</span>
-        <span class="a">${u == null ? '<span class="muted small">no price</span>' : money(u * qtyOf(it), o.currency)}</span>
-        ${canAdd ? `<button class="btn sm soft add-mine" data-a="addMine" data-p="${p.id}" data-id="${it.id}">Add to my items</button>` : ''}</div>`;
+        <span class="grow" dir="auto">${esc(it.name)}${(it.extras || []).length ? `<span class="note">+ ${it.extras.map(e => esc(e.name)).join(', ')}</span>` : ''}${it.note ? `<span class="note" dir="auto">${esc(it.note)}</span>` : ''}${canAdd ? `<button class="add-mine" data-a="addMine" data-p="${p.id}" data-id="${it.id}">${ICON.plus} Add to my items</button>` : ''}</span>
+        <span class="a">${u == null ? '<span class="muted small">no price</span>' : money(u * qtyOf(it), o.currency)}</span></div>`;
     }).join('')}</div>` : ''}
   </div>`;
 }
@@ -1310,7 +1324,7 @@ const A = {
       if (same) same.qty = qtyOf(same) + 1;
       else items.push({ id: rid(8), name: it.name, qty: 1, note: '', price: itemPrice(it), extras: [] });
     });
-    if (ok) toast(`Added ${it.name} to your items`);
+    if (ok) sheetPlaced(it.name);
   },
   qty: el => { const v = $('#it-qty'); v.textContent = Math.max(1, Math.min(99, +v.textContent + +el.dataset.v)); },
   itemQty: el => changeItems(el.dataset.p, items => {
@@ -1326,7 +1340,7 @@ const A = {
       if (s._itemId) { const i = items.findIndex(x => x.id === s._itemId); if (i >= 0) items[i] = { ...items[i], ...data }; }
       else items.push({ id: rid(8), ...data, extras: [] });
     });
-    if (ok) closeSheet();
+    if (ok) { if (s._itemId) { closeSheet(); toast('Saved'); } else if (s._pid === S.user.uid) sheetPlaced(name); else { closeSheet(); toast(`Added ${name}`); } }
   },
   deleteItem: async el => {
     const p = personFor(el.dataset.p), it = p && (p.items || []).find(i => i.id === el.dataset.id);

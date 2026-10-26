@@ -45,6 +45,7 @@ const expect = (k, got, want) => { results[k] = got === want ? 'ok' : `FAIL (got
     for (let i = 1; i < qty; i++) await tap(p, '[data-a="qty"][data-v="1"]');
     await tap(p, '[data-a="saveItem"]');
     await p.waitForTimeout(500);
+    if (await p.locator('.placed-big').count()) { await shot(p, 'placed-' + name.replace(/\W+/g, '_')); await tap(p, '.sheet [data-a="closeSheet"].primary'); }
   };
   const addExtra = async (p, cardIndex, name, price) => {
     await p.locator('.item-card [data-a="extraSheet"].add-extra').nth(cardIndex).click();
@@ -100,6 +101,9 @@ const expect = (k, got, want) => { results[k] = got === want ? 'ok' : `FAIL (got
   await addExtra(guest, 0, 'extra cheese', 20);
   await guest.locator('[data-a="addMine"]').first().click();
   await guest.waitForTimeout(800);
+  expect('placed sheet after Add to my items', await guest.locator('.placed-big').count(), 1);
+  await tap(guest, '.sheet [data-a="closeSheet"].primary');
+  expect('guest sees self in Who\'s in', await guest.locator('.card', { hasText: 'You' }).count() > 0, true);
   await shot(guest, '11-guest-details', true);
 
   // security checks
