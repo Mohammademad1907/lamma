@@ -3,7 +3,7 @@ import { initializeApp } from 'firebase/app';
 import {
   initializeAuth, browserLocalPersistence, connectAuthEmulator, onAuthStateChanged,
   createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, updateProfile,
-  GoogleAuthProvider, signInWithCredential, signInWithPopup, browserPopupRedirectResolver,
+  GoogleAuthProvider, signInWithCredential, signInWithPopup, browserPopupRedirectResolver, linkWithCredential, linkWithPopup,
 } from 'firebase/auth';
 import {
   initializeFirestore, connectFirestoreEmulator, doc, collection, getDoc, getDocs, setDoc, updateDoc,
@@ -13,7 +13,7 @@ import {
 window.FB = {
   initializeApp, initializeAuth, browserLocalPersistence, connectAuthEmulator, onAuthStateChanged,
   createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, updateProfile,
-  GoogleAuthProvider, signInWithCredential, signInWithPopup, browserPopupRedirectResolver,
+  GoogleAuthProvider, signInWithCredential, signInWithPopup, browserPopupRedirectResolver, linkWithCredential, linkWithPopup,
   initializeFirestore, connectFirestoreEmulator, doc, collection, getDoc, getDocs, setDoc, updateDoc,
   deleteDoc, onSnapshot, query, where, orderBy, serverTimestamp, writeBatch, deleteField, limit, arrayUnion, arrayRemove,
 };

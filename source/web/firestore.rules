@@ -5,6 +5,9 @@ service cloud.firestore {
     function signedIn() { return request.auth != null; }
     function me() { return request.auth.uid; }
     function orderData(oid) { return get(/databases/$(database)/documents/orders/$(oid)).data; }
+    function hostOf(oid) { let o = orderData(oid); return o.hostUid == me() || me() in o.get('coHosts', []); }
+    function memberOf(oid) { return exists(/databases/$(database)/documents/orders/$(oid)/people/$(me())); }
+    function deliveredOrder(oid) { return orderData(oid).get('stage', 'open') == 'delivered'; }
 
     match /users/{uid} {
       allow read: if signedIn();
@@ -71,6 +74,24 @@ service cloud.firestore {
           (pid == me() && isOpen() && changed().hasOnly(['name', 'items', 'updatedAt'])) ||
           (pid == me() && changed().hasOnly(['paid'])));
         allow delete: if signedIn() && (isHost() || (pid == me() && isOpen()));
+      }
+
+      // Lamma Dash: everyone in the order sees the leaderboard; each saves only their own best score
+      match /scores/{sid} {
+        allow read: if signedIn() && (memberOf(oid) || hostOf(oid));
+        allow create, update: if signedIn() && sid == me() && (memberOf(oid) || hostOf(oid)) && !deliveredOrder(oid)
+          && request.resource.data.keys().hasOnly(['name', 'best', 'at'])
+          && request.resource.data.best is int && request.resource.data.best >= 0 && request.resource.data.best < 100000;
+        allow delete: if signedIn() && hostOf(oid);
+      }
+
+      // Guess the Check: guesses stay hidden from other players until the order is delivered; hosts don't play
+      match /guesses/{gid} {
+        allow read: if signedIn() && (gid == me() || hostOf(oid) || (memberOf(oid) && deliveredOrder(oid)));
+        allow create, update: if signedIn() && gid == me() && memberOf(oid) && !hostOf(oid) && !deliveredOrder(oid)
+          && request.resource.data.keys().hasOnly(['name', 'guess', 'at'])
+          && request.resource.data.guess is number && request.resource.data.guess >= 0;
+        allow delete: if signedIn() && hostOf(oid);
       }
     }
   }

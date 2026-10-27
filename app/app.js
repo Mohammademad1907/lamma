@@ -5,7 +5,7 @@ const CFG = window.LAMMA_CONFIG;
 const N = window.LammaNative || null;
 const F = window.Fuzzy;
 const FB = window.FB;
-const VERSION = '2.7';
+const VERSION = '2.8';
 const CURRENCIES = ['EGP', 'SAR', 'AED', 'KWD', 'QAR', 'USD', 'EUR', 'GBP'];
 const MAX_PHOTOS = 10;
 const USER_DOMAIN = 'users.lamma.app';
@@ -75,7 +75,7 @@ const S = {
   user: null, profile: null, view: 'loading', homeTab: 'mine', authMode: 'signin',
   hosted: [], joined: [], joinedOrders: {}, menus: [],
   order: null, people: [], me: null, screen: 'details', listTab: 'people', orderMissing: false, delivering: false,
-  pendingCode: null, inbox: [],
+  pendingCode: null, inbox: [], scores: [], myGuess: null, guesses: [],
 };
 const subs = { global: [], order: [], joined: {} };
 const stop = k => { subs[k].forEach(u => u()); subs[k] = []; };
@@ -274,8 +274,28 @@ function googleSignIn() {
   FB.signInWithPopup(auth, new FB.GoogleAuthProvider()).catch(e => toast(AUTH_ERRORS[e.code] || 'Google sign-in failed'));
 }
 async function googleToken(idToken) {
-  try { await FB.signInWithCredential(auth, FB.GoogleAuthProvider.credential(idToken)); }
+  const cred = FB.GoogleAuthProvider.credential(idToken);
+  // signed in already: this token came from "Connect Google", so add Google to this account
+  if (auth.currentUser) { try { await FB.linkWithCredential(auth.currentUser, cred); linked(); } catch (e) { linkFailed(e); } return; }
+  try { await FB.signInWithCredential(auth, cred); }
   catch (e) { toast('Google sign-in failed. Try again.'); }
+}
+function linkGoogle() {
+  if (N) { openUrl(`${CFG.webBase}/auth/`); toast('Choose your Google account in the browser'); return; }
+  FB.linkWithPopup(auth.currentUser, new FB.GoogleAuthProvider()).then(linked, linkFailed);
+}
+function linked() {
+  auth.currentUser.reload().then(() => { if (S.view === 'settings') render(); }).catch(() => { });
+  toast('Google connected. You can now sign in with either one.');
+}
+function linkFailed(e) {
+  if (e && (e.code === 'auth/credential-already-in-use' || e.code === 'auth/email-already-in-use')) {
+    openSheet(`<h2>That Google account already has a Lamma account</h2>
+      <p class="sub">A Google account can belong to one Lamma account only. To connect it here, first remove the other one:</p>
+      <ol class="plain"><li>Open the Firebase console → Authentication → Users.</li><li>Find the user with the Google icon and this Google email, open its ⋮ menu and choose <b>Delete account</b>. Only do this if that account has no orders you need.</li><li>Come back and tap <b>Connect Google</b> again.</li></ol>
+      <button class="btn primary block" data-a="closeSheet">OK</button>`);
+  } else if (e && e.code === 'auth/provider-already-linked') toast('Google is already connected.');
+  else if (e && e.code !== 'auth/popup-closed-by-user') toast('Could not connect Google. Try again.');
 }
 async function ensureProfile(user) {
   const ref = D('users', user.uid);
@@ -368,7 +388,7 @@ function onInbox(list) {
 // a tappable banner at the top while the app is open
 function banner(x) {
   const el = document.createElement('button');
-  el.className = 'banner'; el.dataset.a = 'openNote'; el.dataset.id = x.id;
+  el.className = 'banner'; el.dataset.a = x.badge ? 'go' : 'openNote'; el.dataset.id = x.id; if (x.badge) el.dataset.v = 'profile';
   el.innerHTML = `${ICON.bell}<span><b>${esc(x.title)}</b><span class="sub">${esc(x.body || '')}</span></span>`;
   document.body.appendChild(el);
   setTimeout(() => el.classList.add('out'), 4500);
@@ -424,9 +444,10 @@ function handleLink(url) {
 window.lammaLink = handleLink;
 window.lammaBack = () => {
   if ($('.viewer')) { $('.viewer').remove(); return true; }
+  if ($('.game')) { $('#g-close').click(); return true; }
   if ($('#sheet-root').firstChild) { closeSheet(); return true; }
   if (S.view === 'order' && S.screen !== 'details') { showScreen('details'); return true; }
-  if (['order', 'menus', 'settings', 'inbox'].includes(S.view)) { goHome(); return true; }
+  if (['order', 'menus', 'settings', 'inbox', 'profile'].includes(S.view)) { goHome(); return true; }
   return false;
 };
 
@@ -466,11 +487,13 @@ function openOrder(id) {
     if (o.lockAt && o.lockAt > Date.now() && o.lockAt - Date.now() < 864e5) lockTimer = setTimeout(renderOrderKeepScroll, o.lockAt - Date.now() + 300);
     if (!child) {
       child = true;
+      let games = false;
       const onPeople = ps => {
         S.people = sortPeople(ps.docs, uid);
         S.me = S.people.find(p => p.id === uid) || null;
         renderOrderKeepScroll();
         countMembers();
+        if (!games && (S.me || isHost())) { games = true; watchGames(id, uid); }
       };
       if (o.hostUid === uid) subs.order.push(FB.onSnapshot(C('orders', id, 'people'), onPeople));
       else {
@@ -478,9 +501,28 @@ function openOrder(id) {
         subs.order.push(FB.onSnapshot(C('orders', id, 'people'), onPeople, () => { S.people = []; S.me = null; renderOrderKeepScroll(); }));
       }
     }
+    if (S.loadGuesses && delivered(o)) S.loadGuesses();
     renderOrderKeepScroll();
   }, e => { console.warn('order listener', e && e.code, e && e.message); S.orderMissing = true; render(); }));
   window.scrollTo(0, 0);
+}
+// mini game scores and Guess the Check for the open order
+let guessesSub = null;
+function watchGames(id, uid) {
+  Object.assign(S, { scores: [], myGuess: null, guesses: [] });
+  subs.order.push(FB.onSnapshot(C('orders', id, 'scores'), s => {
+    S.scores = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => b.best - a.best || a.at - b.at);
+    renderOrderKeepScroll();
+  }, () => { }));
+  subs.order.push(FB.onSnapshot(D('orders', id, 'guesses', uid), s => { S.myGuess = s.exists() ? s.data() : null; renderOrderKeepScroll(); }, () => { }));
+  // everyone's guesses can be read once the order is delivered
+  subs.order.push(() => { if (guessesSub) guessesSub(); guessesSub = null; });
+  const loadGuesses = () => {
+    if (guessesSub || !S.order || !delivered(S.order)) return;
+    guessesSub = FB.onSnapshot(C('orders', id, 'guesses'), s => { S.guesses = s.docs.map(d => ({ id: d.id, ...d.data() })); renderOrderKeepScroll(); }, () => { guessesSub = null; });
+  };
+  loadGuesses();
+  S.loadGuesses = loadGuesses;
 }
 function renderOrderKeepScroll() {
   if (S.view !== 'order') return;
@@ -517,6 +559,7 @@ function render() {
   else if (S.view === 'menus') el.innerHTML = viewMenus();
   else if (S.view === 'settings') el.innerHTML = viewSettings();
   else if (S.view === 'inbox') el.innerHTML = viewInbox();
+  else if (S.view === 'profile') el.innerHTML = viewProfile();
   else el.innerHTML = viewHome();
 }
 const backBtn = (a = 'home') => `<button class="icon-btn" data-a="${a}" aria-label="Back">${ICON.back}</button>`;
@@ -547,6 +590,7 @@ function orderCard(o) {
   </div>`;
 }
 function viewHome() {
+  setTimeout(checkBadges, 0);
   const mine = S.homeTab === 'mine';
   const all = S.joined.map(j => S.joinedOrders[j.id] || { id: j.id, place: j.place, hostName: j.hostName, createdAt: j.joinedAt }).filter(o => !o.gone);
   const cohosted = all.filter(o => (o.coHosts || []).includes(S.user.uid));
@@ -554,6 +598,7 @@ function viewHome() {
   const list = mine ? joined : [...S.hosted, ...cohosted].sort((a, b) => ts(b.createdAt) - ts(a.createdAt));
   return `<div class="app-head">
       <div class="brand grow"><img src="logo.svg" alt=""><div><h1>Lamma</h1><div class="sub">${mine ? 'My Orders' : 'Hosted Orders'}</div></div></div>
+      <button class="icon-btn" data-a="go" data-v="profile" aria-label="My profile"><span class="initial sm">${esc(initials((S.profile || {}).name))}</span></button>
       <button class="icon-btn bell" data-a="go" data-v="inbox" aria-label="Notifications">${ICON.bell}${unreadCount() ? `<span class="dot-count">${unreadCount() > 9 ? '9+' : unreadCount()}</span>` : ''}</button>
       <button class="icon-btn" data-a="helpSheet" aria-label="How it works">${ICON.help}</button>
       <button class="icon-btn" data-a="homeMenu" aria-label="More">${ICON.more}</button>
@@ -599,6 +644,14 @@ function viewSettings() {
       ${N && N.openNotifySettings ? `<button class="btn sm" style="flex:none" data-a="notifySettings">${N.notifyAllowed && !N.notifyAllowed() ? 'Turn on' : 'Settings'}</button>` : ''}</div></div>
     <div class="card"><div class="field" style="margin:0"><label>Appearance</label><div class="seg">
       ${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([k, l]) => `<button class="${t === k ? 'on' : ''}" data-a="theme" data-v="${k}">${l}</button>`).join('')}</div></div></div>
+    ${(() => {
+      const prov = ((auth.currentUser && auth.currentUser.providerData) || []).map(x => x.providerId);
+      const g = prov.includes('google.com'), pw = prov.includes('password');
+      return `<div class="card"><b style="font-size:15px">Sign-in methods</b>
+        <div class="money" style="margin-top:6px"><span>Username and password</span><b>${pw ? 'On' : 'Off'}</b></div>
+        <div class="money"><span>Google${g ? ` (${esc((auth.currentUser.providerData.find(x => x.providerId === 'google.com') || {}).email || '')})` : ''}</span><b>${g ? 'Connected' : 'Not connected'}</b></div>
+        ${g ? '' : `<button class="btn block" style="margin-top:10px" data-a="linkGoogle">${ICON.google} Connect Google</button><p class="hint" style="margin:6px 2px 0">Adds Google sign-in to this account. Your orders, menus and badges stay exactly as they are.</p>`}</div>`;
+    })()}
     <div class="card flush">
       <div class="list-row"><div class="grow"><div class="t">Signed in as</div><div class="sub">${esc(p.username ? '@' + p.username : (S.user && S.user.email) || '')}</div></div></div>
       <div class="list-row tap" data-a="signOut"><div class="grow t" style="color:var(--danger)">Sign out</div></div>
@@ -671,6 +724,7 @@ function viewDetails(o) {
     ${host && !appOthers.length ? `<div class="empty-card">Nobody joined yet. Share the invite link or the group code ${esc(o.code)}.<div class="row" style="margin-top:10px"><button class="btn sm primary" data-a="shareInvite">${ICON.share} Share invite</button><button class="btn sm" data-a="copyCode">${ICON.copy} Copy code</button></div></div>` : ''}
     ${host ? `<p class="hint">As a host you can change anyone's food, prices and notes. Tap ${ICON.edit.replace('<svg', '<svg width="14" height="14"')} on a person.</p>` : ''}
     ${[me, ...appOthers, ...offline].map(p => personCard(o, bill, p, !lk && p.id !== me.id)).join('')}
+    ${gamesCard(o, bill)}
     ${!isMainHost() && !lk ? `<button class="btn block ghost danger" style="margin-top:8px" data-a="leaveOrder">Leave this order</button>` : ''}
     </div>`}`;
 }
@@ -688,6 +742,121 @@ function sheetPlaced(name) {
     <button class="btn primary block" data-a="closeSheet">Done</button>
     ${!locked(o) ? `<button class="btn block ghost" style="margin-top:6px" data-a="itemSheet">${ICON.plus} Add another item</button>` : ''}`);
 }
+/* ---------------- games ---------------- */
+function gamesCard(o, bill) {
+  const uid = S.user.uid, res = o.results || {}, done = delivered(o);
+  const myBest = (S.scores.find(x => x.id === uid) || {}).best || 0;
+  const board = S.scores.slice(0, 5);
+  const hostSide = isHost();
+  let guess;
+  if (done && res.guessTotal != null) {
+    const ranked = S.guesses.map(g => ({ ...g, diff: Math.abs(g.guess - res.guessTotal) })).sort((a, b) => a.diff - b.diff);
+    guess = `<p class="sub">The real total was <b>${money(res.guessTotal, o.currency)}</b>.</p>
+      ${ranked.length ? `<div class="board">${ranked.map((g, i) => `<div class="board-row ${g.id === uid ? 'me' : ''}"><span class="rank">${i === 0 ? '🎯' : i + 1}</span><span class="grow">${esc(g.name)}</span><span class="sub">${money(g.guess, o.currency)}</span><b>${g.diff < 0.005 ? 'exact!' : '±' + money(g.diff, o.currency).replace(/^\S+ /, '')}</b></div>`).join('')}</div>`
+        : '<p class="sub">Nobody guessed this time.</p>'}`;
+  } else if (done) {
+    guess = '<p class="sub">This order was delivered before the game started.</p>';
+  } else if (hostSide) {
+    guess = `<p class="sub">Friends guess the final total. When you confirm the prices and deliver, the closest guess wins 🎯. Hosts don't play, since they know the prices.</p>`;
+  } else {
+    guess = `<p class="sub">Guess the final total of the whole order, with VAT, service and delivery. The closest guess to the host's confirmed total wins 🎯.</p>
+      <div class="row" style="margin-top:10px"><div class="inp-icon" style="margin:0;flex:1"><span>${esc(o.currency)}</span><input class="inp" id="guess-v" inputmode="decimal" placeholder="Your guess" value="${S.myGuess ? S.myGuess.guess : ''}"></div>
+      <button class="btn primary" style="flex:none" data-a="saveGuess">${S.myGuess ? 'Change' : 'Guess'}</button></div>
+      ${S.myGuess ? `<p class="hint" style="margin:8px 2px 0">Your guess: ${money(S.myGuess.guess, o.currency)}. Guesses are revealed when the order is delivered.</p>` : ''}`;
+  }
+  return `<div class="sec-head" style="margin-top:26px"><h3>Play while you wait</h3></div>
+    <div class="game-card">
+      <div class="gc-head"><span class="gc-icon">🛵</span><div class="grow"><b>Lamma Dash</b><div class="sub">${done ? (res.gameWinner ? `Champion: ${esc((S.scores.find(x => x.id === res.gameWinner) || {}).name || 'someone')} 🏆` : 'Game over for this order.') : 'Jump over the cones, grab the food. Top score when the order is delivered wins 🏆.'}</div></div>
+        ${!done ? `<button class="btn primary sm" data-a="playDash">Play</button>` : ''}</div>
+      ${board.length ? `<div class="board">${board.map((x, i) => `<div class="board-row ${x.id === uid ? 'me' : ''}"><span class="rank">${i === 0 ? (done ? '🏆' : '🥇') : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1}</span><span class="grow">${esc(x.name)}${x.id === uid ? ' (you)' : ''}</span><b>${x.best}</b></div>`).join('')}</div>`
+        : `<p class="sub" style="margin-top:8px">No scores yet. Be the first!</p>`}
+      ${myBest && !board.some(x => x.id === uid) ? `<p class="hint" style="margin:8px 2px 0">Your best: ${myBest}</p>` : ''}
+    </div>
+    <div class="game-card">
+      <div class="gc-head"><span class="gc-icon">🧾</span><div class="grow"><b>Guess the Check</b></div></div>
+      ${guess}
+    </div>`;
+}
+// when the host delivers: top Dash score and closest guess win, saved on the order
+async function decideWinners(o, total) {
+  const results = { guessTotal: Math.round(total * 100) / 100 };
+  try {
+    const sc = (await FB.getDocs(C('orders', o.id, 'scores'))).docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => b.best - a.best || a.at - b.at);
+    if (sc.length && sc[0].best > 0) { results.gameWinner = sc[0].id; results.gameBest = sc[0].best; }
+    const gs = (await FB.getDocs(C('orders', o.id, 'guesses'))).docs.map(d => ({ id: d.id, ...d.data() }))
+      .map(g => ({ ...g, diff: Math.abs(g.guess - total) })).sort((a, b) => a.diff - b.diff || a.at - b.at);
+    if (gs.length) { results.guessWinner = gs[0].id; results.guessDiff = Math.round(gs[0].diff * 100) / 100; }
+  } catch (e) { console.warn('winners', e); }
+  await upd({ results });
+  if (results.gameWinner) notifyUsers([results.gameWinner], { type: 'win', title: `🏆 You won Lamma Dash in ${o.place}`, body: `Top score: ${results.gameBest}. It's on your profile now.` });
+  if (results.guessWinner) notifyUsers([results.guessWinner], { type: 'win', title: `🎯 You won Guess the Check in ${o.place}`, body: `The total was ${money(results.guessTotal, o.currency)}. Your guess was the closest.` });
+}
+
+/* ---------------- profile & achievements ---------------- */
+function myStats() {
+  const uid = S.user.uid;
+  const joined = S.joined.map(j => S.joinedOrders[j.id]).filter(o => o && !o.gone);
+  const all = [...S.hosted, ...joined];
+  const hostedMain = S.hosted;
+  return {
+    joined: S.joined.length + S.hosted.length,
+    completed: all.filter(delivered).length,
+    hosted: hostedMain.length,
+    hostedDone: hostedMain.filter(delivered).length,
+    bigHost: Math.max(0, ...hostedMain.map(o => o.memberCount || 0)),
+    dashWins: all.filter(o => (o.results || {}).gameWinner === uid).length,
+    guessWins: all.filter(o => (o.results || {}).guessWinner === uid).length,
+    bullseye: all.filter(o => (o.results || {}).guessWinner === uid && (o.results.guessDiff || 0) <= (o.results.guessTotal || 0) * 0.01).length,
+  };
+}
+const BADGES = [
+  ['first', '🍽️', 'First Bite', 'Join or host your first order', s => s.joined, 1],
+  ['regular', '🥡', 'Regular', 'Be in 5 orders', s => s.joined, 5],
+  ['foodie', '🍱', 'Foodie', 'Be in 10 orders', s => s.joined, 10],
+  ['legend', '👑', 'Lamma Legend', 'Be in 25 orders', s => s.joined, 25],
+  ['done5', '✅', 'Clean Plate', 'Finish 5 delivered orders', s => s.completed, 5],
+  ['host1', '🎉', 'First Host', 'Host your first order', s => s.hosted, 1],
+  ['host5', '🧑‍🍳', 'Party Planner', 'Host 5 orders', s => s.hosted, 5],
+  ['host10', '🏟️', 'Big Host', 'Host 10 orders', s => s.hosted, 10],
+  ['crowd', '👥', 'Crowd Puller', 'Host an order with 8 or more people', s => s.bigHost, 8],
+  ['dash1', '🏆', 'Dash Champion', 'Win Lamma Dash in an order', s => s.dashWins, 1],
+  ['dash5', '🛵', 'Speed Demon', 'Win Lamma Dash 5 times', s => s.dashWins, 5],
+  ['guess1', '🎯', 'Check Whisperer', 'Win Guess the Check', s => s.guessWins, 1],
+  ['guess3', '🔮', 'Mind Reader', 'Win Guess the Check 3 times', s => s.guessWins, 3],
+  ['bull', '💯', 'Bullseye', 'Guess the check within 1%', s => s.bullseye, 1],
+];
+function viewProfile() {
+  const p = S.profile || {}, st = myStats();
+  const got = BADGES.filter(b => b[4](st) >= b[5]);
+  return `<div class="page no-nav"><div class="head">${backBtn()}<div class="grow"><h1>My profile</h1></div></div>
+    <div class="profile-top"><div class="initial big">${esc(initials(p.name))}</div><div><h2>${esc(p.name)}</h2><div class="sub">@${esc(p.username || '')} · ${plural(got.length, 'badge')}</div></div></div>
+    <div class="stats">
+      <div><b>${st.joined}</b><span>Orders</span></div>
+      <div><b>${st.hosted}</b><span>Hosted</span></div>
+      <div><b>${st.dashWins}</b><span>Dash wins 🏆</span></div>
+      <div><b>${st.guessWins}</b><span>Guess wins 🎯</span></div>
+    </div>
+    <div class="sec-head"><h3>Achievements</h3><span class="caps">${got.length} of ${BADGES.length}</span></div>
+    <div class="badge-grid">${BADGES.map(b => { const v = b[4](st), ok = v >= b[5]; return `<div class="ach ${ok ? 'on' : ''}">
+      <div class="ach-icon">${b[1]}</div><b>${b[2]}</b><span class="sub">${b[3]}</span>
+      ${ok ? '<span class="ach-done">Unlocked</span>' : `<div class="progress"><i style="width:${Math.min(100, v / b[5] * 100)}%"></i></div><span class="sub small">${Math.min(v, b[5])} / ${b[5]}</span>`}</div>`; }).join('')}</div>
+    <p class="hint" style="margin-top:12px">Counted from the orders you're in now. Orders a host deleted don't count.</p>
+  </div>`;
+}
+// tell people about badges they just unlocked (checked on this phone)
+let badgeSeen = null;
+function checkBadges() {
+  if (!S.user || !S.profile) return;
+  const st = myStats(), now = BADGES.filter(b => b[4](st) >= b[5]).map(b => b[0]);
+  const key = 'lamma.badges.' + S.user.uid;
+  if (badgeSeen == null) { try { badgeSeen = JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) { badgeSeen = null; } if (badgeSeen == null) { badgeSeen = now; try { localStorage.setItem(key, JSON.stringify(now)); } catch (e) { } return; } }
+  const fresh = now.filter(k => !badgeSeen.includes(k));
+  if (!fresh.length) return;
+  badgeSeen = [...new Set([...badgeSeen, ...fresh])];
+  try { localStorage.setItem(key, JSON.stringify(badgeSeen)); } catch (e) { }
+  for (const k of fresh) { const b = BADGES.find(x => x[0] === k); banner({ id: 'b' + k, title: `${b[1]} New badge: ${b[2]}`, body: b[3], badge: true }); }
+}
+
 function itemCard(o, bill, p, it, editable) {
   const u = bill.unit.item({ ...it, pid: p.id });
   const exs = it.extras || [];
@@ -718,7 +887,7 @@ function itemCard(o, bill, p, it, editable) {
 function personCard(o, bill, p, canAdd) {
   const items = p.items || [];
   return `<div class="card">
-    <div class="person-head"><div class="initial">${esc(initials(p.name))}</div><div class="grow"><div class="t">${esc(p.name)}${p.id === S.user.uid ? ' <span class="badge accent">You</span>' : ''}${p.id === o.hostUid ? ' <span class="badge">Host</span>' : (o.coHosts || []).includes(p.id) ? ' <span class="badge">Co-host</span>' : ''}${p.noApp ? ' <span class="badge">Offline</span>' : ''}</div>
+    <div class="person-head"><div class="initial">${esc(initials(p.name))}</div><div class="grow"><div class="t">${esc(p.name)}${p.id === S.user.uid ? ' <span class="badge accent">You</span>' : ''}${(o.results || {}).gameWinner === p.id ? ' <span class="badge win" title="Lamma Dash champion">🏆</span>' : ''}${(o.results || {}).guessWinner === p.id ? ' <span class="badge win" title="Guessed the check">🎯</span>' : ''}${p.id === o.hostUid ? ' <span class="badge">Host</span>' : (o.coHosts || []).includes(p.id) ? ' <span class="badge">Co-host</span>' : ''}${p.noApp ? ' <span class="badge">Offline</span>' : ''}</div>
       <div class="sub">${items.length ? plural(sumQty(items), 'item') : 'Hasn\'t ordered yet'}</div></div>
       ${isHost() && p.id !== S.user.uid ? `<button class="mini" data-a="memberSheet" data-id="${p.id}" aria-label="Manage ${esc(p.name)}">${ICON.edit}</button>` : ''}</div>
     ${items.length ? `<div style="margin-top:8px">${items.map(it => {
@@ -1273,6 +1442,7 @@ function sheetOrderMenu() {
 function sheetHelp() { openSheet(`<h2>How Lamma works</h2>${HELP}<button class="btn primary block" data-a="closeSheet">Got it</button>`); }
 function sheetHomeMenu() {
   openSheet(`<h2>Lamma</h2><div class="card flush" style="margin-top:10px">
+    <div class="list-row tap" data-a="go" data-v="profile"><span style="font-size:22px">🏆</span><div class="grow"><div class="t">My profile and badges</div><div class="sub">Achievements and game wins</div></div></div>
     <div class="list-row tap" data-a="go" data-v="menus">${ICON.photo.replace('<svg', '<svg width="22" height="22"')}<div class="grow"><div class="t">Saved menus</div><div class="sub">${plural(S.menus.length, 'menu')}</div></div></div>
     <div class="list-row tap" data-a="go" data-v="settings">${ICON.edit.replace('<svg', '<svg width="22" height="22"')}<div class="grow"><div class="t">Settings</div><div class="sub">Name, payment link, dark mode</div></div></div>
   </div>`);
@@ -1433,6 +1603,7 @@ const A = {
     if (bill.missing && !confirm(`${plural(bill.missing, 'price')} still missing and will count as 0. Deliver anyway?`)) return;
     await upd({ stage: 'delivered', open: false, deliveredAt: Date.now() });
     const o = S.order;
+    await decideWinners(o, bill.grand);
     for (const r of bill.rows) if (!r.p.noApp && r.p.id !== o.hostUid && r.total > 0)
       notifyUsers([r.p.id], { type: 'delivered', title: `${o.place} was delivered`, body: `You owe ${money(r.total, o.currency)}. Tap to see the breakdown and pay ${o.hostName}.`, amount: Math.round(r.total * 100) / 100 });
     S.delivering = false; showScreen('details');
@@ -1628,8 +1799,10 @@ const A = {
     const o = S.order;
     closeSheet(); stop('order');
     try {
-      const ps = await FB.getDocs(C('orders', o.id, 'people'));
-      for (const d of ps.docs) await FB.deleteDoc(d.ref);
+      for (const sub of ['people', 'scores', 'guesses']) {
+        const ps = await FB.getDocs(C('orders', o.id, sub)).catch(() => ({ docs: [] }));
+        for (const d of ps.docs) await FB.deleteDoc(d.ref).catch(() => { });
+      }
       await FB.deleteDoc(D('codes', o.code)).catch(() => { });
       await FB.deleteDoc(D('orders', o.id));
       toast('Order deleted');
@@ -1644,6 +1817,25 @@ const A = {
     toast('Saved');
   },
   notifySettings: () => N.openNotifySettings(),
+  playDash: () => {
+    const o = S.order, uid = S.user.uid;
+    const mine = S.scores.find(x => x.id === uid);
+    window.LammaDash.start({
+      best: mine ? mine.best : 0,
+      onEnd: score => {
+        const cur = S.scores.find(x => x.id === uid);
+        if (score > 0 && (!cur || score > cur.best) && !delivered(S.order))
+          FB.setDoc(D('orders', o.id, 'scores', uid), { name: S.profile.name, best: score, at: Date.now() }).catch(e => console.warn('score', e));
+      },
+    });
+  },
+  saveGuess: async () => {
+    const v = num($('#guess-v').value);
+    if (!(v > 0)) { toast('Type your guess for the total'); return; }
+    try { await FB.setDoc(D('orders', S.order.id, 'guesses', S.user.uid), { name: S.profile.name, guess: v, at: Date.now() }); toast('Guess saved. Good luck!'); }
+    catch (e) { toast(delivered(S.order) ? 'The order was already delivered.' : 'Could not save. Check your internet.'); }
+  },
+  linkGoogle: () => linkGoogle(),
   theme: el => { try { localStorage.setItem('lamma.theme', el.dataset.v); } catch (e) { } applyTheme(); render(); },
   signOut: () => { if (confirm('Sign out of Lamma?')) FB.signOut(auth); },
 };
