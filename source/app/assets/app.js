@@ -5,7 +5,7 @@ const CFG = window.LAMMA_CONFIG;
 const N = window.LammaNative || null;
 const F = window.Fuzzy;
 const FB = window.FB;
-const VERSION = '2.8';
+const VERSION = '2.9';
 const CURRENCIES = ['EGP', 'SAR', 'AED', 'KWD', 'QAR', 'USD', 'EUR', 'GBP'];
 const MAX_PHOTOS = 10;
 const USER_DOMAIN = 'users.lamma.app';
@@ -54,6 +54,9 @@ const ICON = {
   checkCircle: svg('<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>'),
   bell: svg('<path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 004 0"/>'),
   crown: svg('<path d="M4 18h16M5 15l-1-8 5 4 3-6 3 6 5-4-1 8z"/>'),
+  search: svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>'),
+  reload: svg('<path d="M20 11a8 8 0 10-2.3 5.7"/><path d="M20 4v7h-7"/>'),
+  camera: svg('<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>'),
   help: svg('<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 015 .5c0 1.7-2.5 2-2.5 3.5M12 17h.01"/>'),
   google: '<svg class="g-logo" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>',
 };
@@ -75,7 +78,7 @@ const S = {
   user: null, profile: null, view: 'loading', homeTab: 'mine', authMode: 'signin',
   hosted: [], joined: [], joinedOrders: {}, menus: [],
   order: null, people: [], me: null, screen: 'details', listTab: 'people', orderMissing: false, delivering: false,
-  pendingCode: null, inbox: [], scores: [], myGuess: null, guesses: [],
+  pendingCode: null, inbox: [], scores: [], myGuess: null, guesses: [], avatars: {}, q: '', searchPeople: null,
 };
 const subs = { global: [], order: [], joined: {} };
 const stop = k => { subs[k].forEach(u => u()); subs[k] = []; };
@@ -86,6 +89,22 @@ function toast(msg) {
   t.className = 'toast'; t.textContent = msg;
   $('#toast').appendChild(t);
   setTimeout(() => t.remove(), 2600);
+}
+// in-app confirm box (replaces the phone's grey "The page at ... says" popup)
+function ask({ title, body = '', ok = 'OK', danger = false, icon = '' }) {
+  return new Promise(done => {
+    const d = document.createElement('div');
+    d.className = 'dialog-bg';
+    d.innerHTML = `<div class="dialog" role="alertdialog" aria-modal="true">
+      ${icon ? `<div class="dialog-icon ${danger ? 'danger' : ''}">${icon}</div>` : ''}
+      <h3 dir="auto">${esc(title)}</h3>${body ? `<p class="sub" dir="auto">${esc(body)}</p>` : ''}
+      <div class="dialog-btns"><button class="btn" data-r="0">Cancel</button><button class="btn ${danger ? 'danger-fill' : 'primary'}" data-r="1">${esc(ok)}</button></div></div>`;
+    const end = v => { d.classList.add('out'); setTimeout(() => d.remove(), 160); done(v); };
+    d.addEventListener('click', e => { const b = e.target.closest('[data-r]'); if (b) end(b.dataset.r === '1'); else if (e.target === d) end(false); });
+    d.close = () => end(false);
+    document.body.appendChild(d);
+    d.querySelector('[data-r="1"]').focus();
+  });
 }
 function share(text) {
   if (N) N.share(text);
@@ -352,6 +371,7 @@ FB.onAuthStateChanged(auth, async user => {
   if (S.pendingOrder) { const o = S.pendingOrder; S.pendingOrder = null; openOrder(o); }
   // after a refresh, open the order you were looking at
   if (WEB && savedOrder() && !S.pendingCode) openOrder(savedOrder());
+  else { let r = ''; try { r = sessionStorage.getItem('lamma.reopen') || ''; sessionStorage.removeItem('lamma.reopen'); } catch (e) { } if (r && !S.pendingOrder && !S.pendingCode) openOrder(r); }
   if (S.pendingCode) { const c = S.pendingCode; S.pendingCode = null; joinByCode(c); }
 });
 
@@ -418,7 +438,7 @@ function viewInbox() {
       ${unreadCount() ? `<button class="btn sm ghost" data-a="readAll">Mark all read</button>` : ''}</div>
     ${N ? '' : `<p class="hint">On iPhone, notifications show here and as a banner while Lamma is open.</p>`}
     ${items.length ? `<div class="card flush">${items.map(x => `<div class="list-row tap note-row ${x.read ? '' : 'unread'}" data-a="openNote" data-id="${x.id}">
-        <div class="initial">${esc(initials(x.fromName))}</div>
+        ${avatar(x.from, x.fromName)}
         <div class="grow"><div class="t2">${esc(x.title)}</div><div class="sub">${esc(x.body || '')}</div><div class="sub small">${ago(x.at)}</div></div>
         ${x.read ? '' : '<span class="unread-dot"></span>'}</div>`).join('')}</div>`
       : `<div class="empty">No notifications yet. You'll see here when people join your orders, when an order locks or is delivered, and payment reminders.</div>`}
@@ -443,10 +463,12 @@ function handleLink(url) {
 }
 window.lammaLink = handleLink;
 window.lammaBack = () => {
+  if ($('.dialog-bg')) { $('.dialog-bg').close(); return true; }
   if ($('.viewer')) { $('.viewer').remove(); return true; }
   if ($('.game')) { $('#g-close').click(); return true; }
   if ($('#sheet-root').firstChild) { closeSheet(); return true; }
   if (S.view === 'order' && S.screen !== 'details') { showScreen('details'); return true; }
+  if (S.view === 'search') { closeSearch(); return true; }
   if (['order', 'menus', 'settings', 'inbox', 'profile'].includes(S.view)) { goHome(); return true; }
   return false;
 };
@@ -471,7 +493,7 @@ const sortPeople = (docs, uid) => docs.map(d => ({ id: d.id, ...d.data() })).sor
 let lockTimer = null;
 function openOrder(id) {
   stop('order');
-  Object.assign(S, { view: 'order', order: null, people: [], me: null, orderMissing: false, screen: 'details', delivering: false });
+  Object.assign(S, { view: 'order', order: null, people: [], me: null, orderMissing: false, screen: 'details', delivering: false, avatars: {} });
   render();
   const uid = S.user.uid;
   let child = false;
@@ -560,6 +582,7 @@ function render() {
   else if (S.view === 'settings') el.innerHTML = viewSettings();
   else if (S.view === 'inbox') el.innerHTML = viewInbox();
   else if (S.view === 'profile') el.innerHTML = viewProfile();
+  else if (S.view === 'search') { el.innerHTML = viewSearch(); bindSearch(); }
   else el.innerHTML = viewHome();
 }
 const backBtn = (a = 'home') => `<button class="icon-btn" data-a="${a}" aria-label="Back">${ICON.back}</button>`;
@@ -567,7 +590,7 @@ const backBtn = (a = 'home') => `<button class="icon-btn" data-a="${a}" aria-lab
 function viewAuth() {
   const up = S.authMode === 'signup';
   return `<div class="page no-nav">
-    <div class="auth-logo"><img src="logo.svg" alt=""><h1>Lamma</h1><p class="sub">Order food together and split the bill.</p></div>
+    <div class="auth-logo"><img src="logo.svg" alt=""><h1 class="ar-name">لمَّة</h1><p class="sub">Order food together and split the bill.</p></div>
     <div class="seg" style="margin-bottom:18px"><button class="${up ? '' : 'on'}" data-a="authMode" data-v="signin">Sign in</button><button class="${up ? 'on' : ''}" data-a="authMode" data-v="signup">Create account</button></div>
     ${up ? `<div class="field"><label>Your name</label><input class="inp" id="au-name" placeholder="How friends will see you" autocomplete="name"></div>` : ''}
     <div class="field"><label>Username</label><input class="inp" id="au-user" autocapitalize="none" autocomplete="username" spellcheck="false"></div>
@@ -597,10 +620,11 @@ function viewHome() {
   const joined = all.filter(o => !cohosted.includes(o));
   const list = mine ? joined : [...S.hosted, ...cohosted].sort((a, b) => ts(b.createdAt) - ts(a.createdAt));
   return `<div class="app-head">
-      <div class="brand grow"><img src="logo.svg" alt=""><div><h1>Lamma</h1><div class="sub">${mine ? 'My Orders' : 'Hosted Orders'}</div></div></div>
-      <button class="icon-btn" data-a="go" data-v="profile" aria-label="My profile"><span class="initial sm">${esc(initials((S.profile || {}).name))}</span></button>
+      <div class="brand grow"><img src="logo.svg" alt=""><div><h1 class="ar-name">لمَّة</h1><div class="sub">${mine ? 'My Orders' : 'Hosted Orders'}</div></div></div>
+      <button class="icon-btn" data-a="search" aria-label="Search">${ICON.search}</button>
+      <button class="icon-btn" data-a="reload" aria-label="Refresh">${ICON.reload}</button>
       <button class="icon-btn bell" data-a="go" data-v="inbox" aria-label="Notifications">${ICON.bell}${unreadCount() ? `<span class="dot-count">${unreadCount() > 9 ? '9+' : unreadCount()}</span>` : ''}</button>
-      <button class="icon-btn" data-a="helpSheet" aria-label="How it works">${ICON.help}</button>
+      <button class="icon-btn" data-a="go" data-v="profile" aria-label="My profile">${avatar(S.user.uid, (S.profile || {}).name, 'sm')}</button>
       <button class="icon-btn" data-a="homeMenu" aria-label="More">${ICON.more}</button>
     </div>
     <div class="htabs"><button class="${mine ? 'on' : ''}" data-a="homeTab" data-v="mine">My Orders</button><button class="${mine ? '' : 'on'}" data-a="homeTab" data-v="hosted">Hosted Orders</button></div>
@@ -692,6 +716,8 @@ function viewDetails(o) {
   const count = S.people.length || o.memberCount || 1;
   return `<div class="page no-nav">
     <div class="head">${backBtn()}<div class="grow"><h1 class="h-sm">Order Details</h1></div>
+      <button class="icon-btn" data-a="search" aria-label="Search">${ICON.search}</button>
+      <button class="icon-btn" data-a="reload" aria-label="Refresh">${ICON.reload}</button>
       ${host ? `<button class="icon-btn" data-a="shareInvite" aria-label="Share invite">${ICON.share}</button>` : ''}
       <button class="icon-btn" data-a="orderMenu" aria-label="More">${ICON.more}</button></div>
     ${!lk && me ? `<div class="tip">${ICON.bulb}<span>Item already listed by someone? Tap “Add to my items” on it instead of typing it again.</span></div>` : ''}
@@ -768,7 +794,7 @@ function gamesCard(o, bill) {
     <div class="game-card">
       <div class="gc-head"><span class="gc-icon">🛵</span><div class="grow"><b>Lamma Dash</b><div class="sub">${done ? (res.gameWinner ? `Champion: ${esc((S.scores.find(x => x.id === res.gameWinner) || {}).name || 'someone')} 🏆` : 'Game over for this order.') : 'Jump over the cones, grab the food. Top score when the order is delivered wins 🏆.'}</div></div>
         ${!done ? `<button class="btn primary sm" data-a="playDash">Play</button>` : ''}</div>
-      ${board.length ? `<div class="board">${board.map((x, i) => `<div class="board-row ${x.id === uid ? 'me' : ''}"><span class="rank">${i === 0 ? (done ? '🏆' : '🥇') : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1}</span><span class="grow">${esc(x.name)}${x.id === uid ? ' (you)' : ''}</span><b>${x.best}</b></div>`).join('')}</div>`
+      ${board.length ? `<div class="board">${board.map((x, i) => `<div class="board-row ${x.id === uid ? 'me' : ''}"><span class="rank">${i === 0 ? (done ? '🏆' : '🥇') : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1}</span>${avatar(x.id, x.name, 'xs')}<span class="grow">${esc(x.name)}${x.id === uid ? ' (you)' : ''}</span><b>${x.best}</b></div>`).join('')}</div>`
         : `<p class="sub" style="margin-top:8px">No scores yet. Be the first!</p>`}
       ${myBest && !board.some(x => x.id === uid) ? `<p class="hint" style="margin:8px 2px 0">Your best: ${myBest}</p>` : ''}
     </div>
@@ -792,55 +818,240 @@ async function decideWinners(o, total) {
   if (results.guessWinner) notifyUsers([results.guessWinner], { type: 'win', title: `🎯 You won Guess the Check in ${o.place}`, body: `The total was ${money(results.guessTotal, o.currency)}. Your guess was the closest.` });
 }
 
+
+/* ---------------- avatars ----------------
+   users/{uid}.avatar is { photo: small JPEG data URL } or { e: emoji, c: color } or { c: color } for coloured initials.
+   Other people's avatars are read from their user doc once and kept for the session. */
+const AV_COLORS = ['#E8552D', '#F59E0B', '#16A34A', '#0EA5E9', '#6366F1', '#DB2777', '#0F766E', '#57534E'];
+const AV_EMOJI = ['😀', '😎', '🤠', '🥳', '🤓', '😇', '🥷', '👻', '😺', '🐼', '🦊', '🐯', '🐸', '🦁', '🐵', '🐧', '🍔', '🍕', '🌮', '🍩', '🍣', '🌯', '☕', '🧋', '⚽', '🎮', '🚀', '👑'];
+const avPending = new Set(); let avTimer = 0;
+function avatarOf(uid) {
+  if (S.user && uid === S.user.uid) return (S.profile || {}).avatar || null;
+  return S.avatars[uid];
+}
+function wantAvatar(uid) {
+  if (!uid || /^x_/.test(uid) || uid in S.avatars || avPending.has(uid)) return;
+  avPending.add(uid); clearTimeout(avTimer); avTimer = setTimeout(loadAvatars, 40);
+}
+async function loadAvatars() {
+  const ids = [...avPending]; avPending.clear();
+  await Promise.all(ids.map(id => FB.getDoc(D('users', id)).then(d => { S.avatars[id] = d.exists() ? (d.data().avatar || null) : null; }).catch(() => { S.avatars[id] = null; })));
+  if (ids.some(id => S.avatars[id])) rerenderKeep();
+}
+function rerenderKeep() {
+  const a = document.activeElement;
+  if (a && /INPUT|TEXTAREA/.test(a.tagName) && $('#app').contains(a)) return;
+  if (S.view === 'order') return renderOrderKeepScroll();
+  if (S.view === 'search') return;
+  const y = window.scrollY; render(); window.scrollTo(0, y);
+}
+const safePhoto = u => typeof u === 'string' && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(u) ? u : '';
+function avatar(uid, name, cls = '') {
+  const a = avatarOf(uid);
+  if (a === undefined) wantAvatar(uid);
+  const col = a && AV_COLORS.includes(a.c) ? a.c : '';
+  if (a && safePhoto(a.photo)) return `<div class="initial av ${cls}"><img src="${safePhoto(a.photo)}" alt=""></div>`;
+  if (a && a.e && AV_EMOJI.includes(a.e)) return `<div class="initial av ${cls}" style="background:${col || 'var(--accent-soft)'}"><span class="av-e">${a.e}</span></div>`;
+  return `<div class="initial ${cls}"${col ? ` style="background:${col};color:#fff"` : ''}>${esc(initials(name))}</div>`;
+}
+function sheetAvatar() {
+  const cur = (S.profile || {}).avatar || {};
+  S.avDraft = { photo: safePhoto(cur.photo), e: cur.e || '', c: cur.c || AV_COLORS[0] };
+  openSheet(`<h2>Profile picture</h2><div id="av-prev" class="av-prev"></div>
+    <div class="row" style="margin:14px 0 4px"><button class="btn" data-a="avPhoto">${ICON.camera} Upload photo</button><button class="btn" data-a="avPick" data-k="init">Use initials</button></div>
+    <div class="sec-head" style="margin-top:14px"><h3>Or pick an emoji</h3></div>
+    <div class="av-emoji">${AV_EMOJI.map(e => `<button data-a="avPick" data-k="e" data-v="${e}">${e}</button>`).join('')}</div>
+    <div class="sec-head" style="margin-top:14px"><h3>Colour</h3></div>
+    <div class="av-colors">${AV_COLORS.map(c => `<button data-a="avPick" data-k="c" data-v="${c}" style="background:${c}" aria-label="Colour"></button>`).join('')}</div>
+    <button class="btn primary block" style="margin-top:18px" data-a="avSave">Save</button>`);
+  avPreview();
+}
+function avPreview() {
+  const d = S.avDraft, el = $('#av-prev'); if (!el) return;
+  const a = d.photo ? { photo: d.photo } : d.e ? { e: d.e, c: d.c } : { c: d.c };
+  const keep = S.profile.avatar; S.profile.avatar = a;
+  el.innerHTML = avatar(S.user.uid, S.profile.name, 'big');
+  S.profile.avatar = keep;
+  document.querySelectorAll('.av-colors button').forEach(b => b.classList.toggle('on', b.dataset.v === d.c && !d.photo));
+  document.querySelectorAll('.av-emoji button').forEach(b => b.classList.toggle('on', b.dataset.v === d.e && !d.photo));
+}
+// square-crop a picked photo and shrink it to 192px so it fits easily in the user doc
+function photoToAvatar(file) {
+  return new Promise((ok, bad) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const n = 192, c = document.createElement('canvas'); c.width = c.height = n;
+      const k = Math.min(img.width, img.height), x = (img.width - k) / 2, y = (img.height - k) / 2;
+      c.getContext('2d').drawImage(img, x, y, k, k, 0, 0, n, n);
+      URL.revokeObjectURL(url); ok(c.toDataURL('image/jpeg', 0.82));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); bad(new Error('image')); };
+    img.src = url;
+  });
+}
+
+
+/* ---------------- search ----------------
+   One box for everything: your orders, the food and people in them, saved menus, notifications, badges and settings.
+   Food in other orders is loaded once (the 20 newest orders) when search opens. */
+function openSearch() {
+  S.searchFrom = S.view === 'order' && S.order ? S.order.id : null;
+  if (S.view !== 'order') stop('order');
+  S.view = 'search'; render(); window.scrollTo(0, 0);
+  loadSearchPeople();
+}
+function closeSearch() { if (S.searchFrom) openOrder(S.searchFrom); else goHome(); }
+function searchOrders() {
+  const joined = S.joined.map(j => S.joinedOrders[j.id] || { id: j.id, place: j.place, hostName: j.hostName, createdAt: j.joinedAt }).filter(o => !o.gone);
+  const seen = new Set();
+  return [...S.hosted, ...joined].filter(o => !seen.has(o.id) && seen.add(o.id)).sort((a, b) => ts(b.createdAt) - ts(a.createdAt));
+}
+async function loadSearchPeople() {
+  if (S.searchPeople) return;
+  S.searchPeople = {};
+  const list = searchOrders().slice(0, 20);
+  await Promise.all(list.map(o => FB.getDocs(C('orders', o.id, 'people')).then(q => { S.searchPeople[o.id] = q.docs.map(d => ({ id: d.id, ...d.data() })); }).catch(() => { })));
+  if (S.view === 'search') $('#sres').innerHTML = searchResults(S.q);
+}
+const SEARCH_PAGES = [
+  ['Settings', 'name payment instapay link dark mode theme light', 'go', 'settings', '⚙️'],
+  ['Dark mode', 'theme night light appearance', 'go', 'settings', '🌙'],
+  ['Connect Google', 'google sign in account link email', 'go', 'settings', '🔗'],
+  ['My profile and badges', 'achievements avatar picture photo stats', 'go', 'profile', '🏅'],
+  ['Notifications', 'inbox alerts bell', 'go', 'inbox', '🔔'],
+  ['Saved menus', 'restaurants menu photos', 'go', 'menus', '📖'],
+  ['Host an order', 'new create start', 'newOrder', '', '➕'],
+  ['Join an order', 'code invite link', 'joinSheet', '', '🎟️'],
+  ['How Lamma works', 'help guide', 'helpSheet', '', '❓'],
+];
+function viewSearch() {
+  return `<div class="page no-nav"><div class="head">${backBtn('closeSearch')}<div class="search-box grow">${ICON.search}<input class="inp" id="sq" type="search" dir="auto" placeholder="Search orders, food, people…" autocomplete="off" value="${esc(S.q)}"></div></div>
+    <div id="sres">${searchResults(S.q)}</div></div>`;
+}
+function bindSearch() {
+  const i = $('#sq'); if (!i) return;
+  i.oninput = () => { S.q = i.value; $('#sres').innerHTML = searchResults(S.q); };
+  setTimeout(() => i.focus(), 50);
+}
+function searchResults(q) {
+  const n = F.normalize(q);
+  if (!n) return `<div class="empty">Type to search your orders, the food and people in them, saved menus, notifications, badges and settings.</div>`;
+  const has = (...t) => t.some(x => x && F.normalize(x).includes(n));
+  const row = (icon, title, sub, a, extra = '') => `<div class="list-row tap" data-a="${a}" ${extra}><span class="s-ic">${icon}</span><div class="grow" style="min-width:0"><div class="t" dir="auto">${esc(title)}</div>${sub ? `<div class="sub" dir="auto">${esc(sub)}</div>` : ''}</div>${ICON.chev}</div>`;
+  const sec = (h, rows) => rows.length ? `<div class="sec-head" style="margin-top:18px"><h3>${h}</h3><span class="caps">${rows.length}</span></div><div class="card flush">${rows.slice(0, 12).join('')}</div>` : '';
+  const orders = searchOrders();
+  const oRows = orders.filter(o => has(o.place, o.description, o.hostName, o.code)).map(o => row('🧾', o.place || 'Order', `${o.hostUid === S.user.uid ? 'Hosted by you' : 'Hosted by ' + (o.hostName || 'a friend')} · ${fmtDate(ts(o.createdAt))}`, 'openOrder', `data-id="${o.id}"`));
+  const food = [], people = [];
+  const pool = { ...(S.searchPeople || {}) };
+  if (S.order && S.people.length) pool[S.order.id] = S.people;
+  for (const [oid, ps] of Object.entries(pool)) {
+    const o = orders.find(x => x.id === oid) || (S.order && S.order.id === oid ? S.order : {});
+    for (const p of ps) {
+      if (has(p.name)) people.push(row(avatar(p.uid || p.id, p.name, 'sm'), p.name, `In ${o.place || 'an order'}`, 'openOrder', `data-id="${oid}"`));
+      for (const it of p.items || []) if (has(it.name, it.note, ...(it.extras || []).map(x => x.name)))
+        food.push(row('🍴', `${qtyOf(it)} × ${it.name}`, `${p.name} · ${o.place || 'an order'}`, 'openOrder', `data-id="${oid}"`));
+    }
+  }
+  const seenP = new Set(); const peopleU = people.filter(r => !seenP.has(r) && seenP.add(r));
+  const mRows = S.menus.filter(m => has(m.place, m.name, m.web)).map(m => row('📖', m.place || m.name || 'Menu', 'Saved menu', 'go', 'data-v="menus"'));
+  const nRows = S.inbox.filter(x => has(x.title, x.body, x.fromName)).map(x => row('🔔', x.title, x.body, 'openNote', `data-id="${x.id}"`));
+  const st = myStats();
+  const bRows = BADGES.filter(b => has(b[2], b[3], b[6])).map(b => row(b[1], b[2], `${b[3]}${b[4](st) >= b[5] ? ' · unlocked' : ''}`, 'go', 'data-v="profile"'));
+  const pRows = SEARCH_PAGES.filter(x => has(x[0], x[1])).map(x => row(x[4], x[0], '', x[2], x[3] ? `data-v="${x[3]}"` : ''));
+  const html = sec('Orders', oRows) + sec('Food', food) + sec('People', peopleU) + sec('Saved menus', mRows) + sec('Notifications', nRows) + sec('Badges', bRows) + sec('Settings and pages', pRows);
+  return html || `<div class="empty">Nothing found for “${esc(q)}”.${S.searchPeople && !Object.keys(S.searchPeople).length ? '' : ''}</div>`;
+}
+
 /* ---------------- profile & achievements ---------------- */
 function myStats() {
   const uid = S.user.uid;
   const joined = S.joined.map(j => S.joinedOrders[j.id]).filter(o => o && !o.gone);
   const all = [...S.hosted, ...joined];
   const hostedMain = S.hosted;
+  const won = k => all.filter(o => (o.results || {})[k] === uid);
+  const places = {};
+  for (const o of all) { const k = F.normalize(o.place || ''); if (k) places[k] = (places[k] || 0) + 1; }
+  const hours = all.map(o => new Date(ts(o.createdAt) || 0));
+  // longest run of back-to-back weeks with at least one order
+  const weeks = [...new Set(all.map(o => Math.floor((ts(o.createdAt) || 0) / 6048e5)))].sort((a, b) => a - b);
+  let streak = 0, run = 0;
+  weeks.forEach((w, i) => { run = i && w === weeks[i - 1] + 1 ? run + 1 : 1; streak = Math.max(streak, run); });
   return {
     joined: S.joined.length + S.hosted.length,
     completed: all.filter(delivered).length,
     hosted: hostedMain.length,
     hostedDone: hostedMain.filter(delivered).length,
     bigHost: Math.max(0, ...hostedMain.map(o => o.memberCount || 0)),
-    dashWins: all.filter(o => (o.results || {}).gameWinner === uid).length,
-    guessWins: all.filter(o => (o.results || {}).guessWinner === uid).length,
-    bullseye: all.filter(o => (o.results || {}).guessWinner === uid && (o.results.guessDiff || 0) <= (o.results.guessTotal || 0) * 0.01).length,
+    guests: hostedMain.reduce((a, o) => a + Math.max(0, (o.memberCount || 1) - 1), 0),
+    places: Object.keys(places).length,
+    loyal: Math.max(0, ...Object.values(places)),
+    night: hours.filter(d => d.getHours() >= 22 || d.getHours() < 4).length,
+    early: hours.filter(d => d.getHours() >= 5 && d.getHours() < 10).length,
+    weekend: hours.filter(d => d.getDay() === 5 || d.getDay() === 6).length,
+    streak,
+    dashWins: won('gameWinner').length,
+    dashBest: Math.max(num((S.profile || {}).dashBest), ...won('gameWinner').map(o => o.results.gameBest || 0)),
+    guessWins: won('guessWinner').length,
+    bullseye: won('guessWinner').filter(o => (o.results.guessDiff || 0) <= (o.results.guessTotal || 0) * 0.01).length,
   };
 }
-const BADGES = [
-  ['first', '🍽️', 'First Bite', 'Join or host your first order', s => s.joined, 1],
-  ['regular', '🥡', 'Regular', 'Be in 5 orders', s => s.joined, 5],
-  ['foodie', '🍱', 'Foodie', 'Be in 10 orders', s => s.joined, 10],
-  ['legend', '👑', 'Lamma Legend', 'Be in 25 orders', s => s.joined, 25],
-  ['done5', '✅', 'Clean Plate', 'Finish 5 delivered orders', s => s.completed, 5],
-  ['host1', '🎉', 'First Host', 'Host your first order', s => s.hosted, 1],
-  ['host5', '🧑‍🍳', 'Party Planner', 'Host 5 orders', s => s.hosted, 5],
-  ['host10', '🏟️', 'Big Host', 'Host 10 orders', s => s.hosted, 10],
-  ['crowd', '👥', 'Crowd Puller', 'Host an order with 8 or more people', s => s.bigHost, 8],
-  ['dash1', '🏆', 'Dash Champion', 'Win Lamma Dash in an order', s => s.dashWins, 1],
-  ['dash5', '🛵', 'Speed Demon', 'Win Lamma Dash 5 times', s => s.dashWins, 5],
-  ['guess1', '🎯', 'Check Whisperer', 'Win Guess the Check', s => s.guessWins, 1],
-  ['guess3', '🔮', 'Mind Reader', 'Win Guess the Check 3 times', s => s.guessWins, 3],
-  ['bull', '💯', 'Bullseye', 'Guess the check within 1%', s => s.bullseye, 1],
+/* Badge tracks: each step is [key, icon, name, goal]. The tier (bronze → silver → gold → diamond → legend)
+   follows how far along the track a badge is. Old keys are kept so nobody loses a badge. */
+const TRACKS = [
+  ['Orders', 'joined', n => `Be in ${n === 1 ? 'your first order' : n + ' orders'}`, [
+    ['first', '🍽️', 'First Bite', 1], ['regular', '🥡', 'Regular', 5], ['foodie', '🍱', 'Foodie', 10], ['legend', '👑', 'Lamma Legend', 25],
+    ['o50', '🥈', 'Half Century', 50], ['o100', '💯', 'Centurion', 100], ['o250', '🍖', 'Feast Master', 250], ['o500', '🦾', 'Food Titan', 500], ['o1000', '🌟', 'Lamma Immortal', 1000]]],
+  ['Delivered', 'completed', n => `Finish ${n} delivered orders`, [
+    ['done5', '✅', 'Clean Plate', 5], ['done25', '😋', 'Happy Tummy', 25], ['done100', '🍲', 'Never Hungry', 100], ['done500', '🕳️', 'Bottomless', 500]]],
+  ['Hosting', 'hosted', n => `Host ${n === 1 ? 'your first order' : n + ' orders'}`, [
+    ['host1', '🎉', 'First Host', 1], ['host5', '🧑‍🍳', 'Party Planner', 5], ['host10', '🏟️', 'Big Host', 10], ['host25', '👨‍🍳', 'Head Chef', 25],
+    ['host50', '🎩', 'Lamma Boss', 50], ['host100', '🏛️', 'Host Legend', 100], ['host250', '💼', 'Lunch Tycoon', 250], ['host500', '🏆', 'Hall of Fame', 500]]],
+  ['Hosting', 'bigHost', n => `Host an order with ${n} or more people`, [
+    ['crowd', '👥', 'Crowd Puller', 8], ['crowd15', '🎪', 'Full House', 15], ['crowd30', '🏟️', 'Stadium', 30]]],
+  ['Hosting', 'guests', n => `Feed ${n} guests in total as host`, [
+    ['feed25', '🍛', 'Generous', 25], ['feed100', '🤲', 'Big Heart', 100], ['feed500', '🫶', 'City Feeder', 500], ['feed1000', '🌍', 'Feeds the World', 1000]]],
+  ['Explorer', 'places', n => `Order from ${n} different places`, [
+    ['place3', '🧭', 'Explorer', 3], ['place10', '🗺️', 'Food Tourist', 10], ['place25', '🔎', 'Taste Hunter', 25], ['place50', '✈️', 'Globetrotter', 50]]],
+  ['Explorer', 'loyal', n => `Order from the same place ${n} times`, [
+    ['loyal10', '❤️', 'Loyal Customer', 10], ['loyal50', '💍', 'Married to the Menu', 50]]],
+  ['Habits', 'night', n => n === 1 ? 'Be in an order started after 10 pm' : `${n} orders started after 10 pm`, [['night1', '🦉', 'Night Owl', 1], ['night10', '🌙', 'Midnight Muncher', 10], ['night50', '🧛', 'Vampire Diner', 50]]],
+  ['Habits', 'early', n => n === 1 ? 'Be in an order started before 10 am' : `${n} orders started before 10 am`, [['early1', '🐦', 'Early Bird', 1], ['early10', '🥐', 'Breakfast Club', 10]]],
+  ['Habits', 'weekend', n => `${n} orders on a Friday or Saturday`, [['wknd5', '🛋️', 'Weekend Feast', 5], ['wknd25', '🎊', 'Weekend Warrior', 25]]],
+  ['Habits', 'streak', n => `Order ${n} weeks in a row`, [['streak4', '🔥', 'On Fire', 4], ['streak12', '📅', 'Clockwork', 12], ['streak52', '🗓️', 'Year Round', 52]]],
+  ['Games', 'dashWins', n => `Win Lamma Dash ${n === 1 ? 'in an order' : n + ' times'}`, [
+    ['dash1', '🏆', 'Dash Champion', 1], ['dash5', '🛵', 'Speed Demon', 5], ['dash10', '🏁', 'Road King', 10], ['dash25', '⚡', 'Unstoppable', 25], ['dash50', '🚀', 'Rocket Rider', 50]]],
+  ['Games', 'dashBest', n => `Score ${n} in Lamma Dash`, [['score100', '🎮', 'Rookie Rider', 100], ['score500', '🕹️', 'Pro Rider', 500], ['score1000', '💨', 'Turbo', 1000], ['score2500', '🌠', 'Hyperdrive', 2500]]],
+  ['Games', 'guessWins', n => `Win Guess the Check ${n === 1 ? 'once' : n + ' times'}`, [
+    ['guess1', '🎯', 'Check Whisperer', 1], ['guess3', '🔮', 'Mind Reader', 3], ['guess10', '🧮', 'Human Calculator', 10], ['guess25', '🧙', 'Oracle', 25]]],
+  ['Games', 'bullseye', n => n === 1 ? 'Guess the check within 1%' : `Guess within 1% ${n} times`, [['bull', '💯', 'Bullseye', 1], ['bull5', '🏹', 'Sharpshooter', 5]]],
 ];
+const TIERS = ['bronze', 'silver', 'gold', 'diamond', 'legend'];
+// [key, icon, name, description, stat fn, goal, group, tier]
+const BADGES = TRACKS.flatMap(([group, stat, desc, steps]) => steps.map(([k, icon, name, goal], i) =>
+  [k, icon, name, desc(goal), st => st[stat] || 0, goal, group, TIERS[Math.round(i * Math.min(4, steps.length - 1) / Math.max(1, steps.length - 1))]]));
 function viewProfile() {
   const p = S.profile || {}, st = myStats();
   const got = BADGES.filter(b => b[4](st) >= b[5]);
+  const groups = [...new Set(BADGES.map(b => b[6]))];
+  const f = S.badgeFilter || 'all';
+  const shown = b => f === 'all' || (f === 'got' ? b[4](st) >= b[5] : b[4](st) < b[5]);
   return `<div class="page no-nav"><div class="head">${backBtn()}<div class="grow"><h1>My profile</h1></div></div>
-    <div class="profile-top"><div class="initial big">${esc(initials(p.name))}</div><div><h2>${esc(p.name)}</h2><div class="sub">@${esc(p.username || '')} · ${plural(got.length, 'badge')}</div></div></div>
+    <div class="profile-top"><button class="av-edit" data-a="avatarSheet" aria-label="Change profile picture">${avatar(S.user.uid, p.name, 'big')}<span class="av-cam">${ICON.camera}</span></button>
+      <div class="grow" style="min-width:0"><h2>${esc(p.name)}</h2><div class="sub">@${esc(p.username || '')}</div>
+      <div class="badge-count">🏅 ${got.length} of ${BADGES.length} badges</div></div></div>
     <div class="stats">
       <div><b>${st.joined}</b><span>Orders</span></div>
       <div><b>${st.hosted}</b><span>Hosted</span></div>
       <div><b>${st.dashWins}</b><span>Dash wins 🏆</span></div>
       <div><b>${st.guessWins}</b><span>Guess wins 🎯</span></div>
     </div>
-    <div class="sec-head"><h3>Achievements</h3><span class="caps">${got.length} of ${BADGES.length}</span></div>
-    <div class="badge-grid">${BADGES.map(b => { const v = b[4](st), ok = v >= b[5]; return `<div class="ach ${ok ? 'on' : ''}">
-      <div class="ach-icon">${b[1]}</div><b>${b[2]}</b><span class="sub">${b[3]}</span>
-      ${ok ? '<span class="ach-done">Unlocked</span>' : `<div class="progress"><i style="width:${Math.min(100, v / b[5] * 100)}%"></i></div><span class="sub small">${Math.min(v, b[5])} / ${b[5]}</span>`}</div>`; }).join('')}</div>
-    <p class="hint" style="margin-top:12px">Counted from the orders you're in now. Orders a host deleted don't count.</p>
+    <div class="sec-head"><h3>Achievements</h3></div>
+    <div class="seg" style="margin-bottom:14px"><button class="${f === 'all' ? 'on' : ''}" data-a="badgeFilter" data-v="all">All</button><button class="${f === 'got' ? 'on' : ''}" data-a="badgeFilter" data-v="got">Unlocked</button><button class="${f === 'next' ? 'on' : ''}" data-a="badgeFilter" data-v="next">To do</button></div>
+    ${groups.map(g => { const list = BADGES.filter(b => b[6] === g && shown(b)); if (!list.length) return ''; return `<div class="caps" style="margin:16px 2px 8px">${g} · ${BADGES.filter(b => b[6] === g && b[4](st) >= b[5]).length}/${BADGES.filter(b => b[6] === g).length}</div>
+      <div class="badge-grid">${list.map(b => { const v = b[4](st), ok = v >= b[5]; return `<div class="ach ${ok ? 'on' : ''} tier-${b[7]}">
+        <div class="ach-icon">${b[1]}</div><b>${b[2]}</b><span class="sub">${b[3]}</span>
+        ${ok ? `<span class="ach-done">${b[7]}</span>` : `<div class="progress"><i style="width:${Math.min(100, v / b[5] * 100)}%"></i></div><span class="sub small">${Math.min(v, b[5])} / ${b[5]}</span>`}</div>`; }).join('')}</div>`; }).join('')}
+    <p class="hint" style="margin-top:14px">Counted from the orders you're in now. Orders a host deleted don't count.</p>
   </div>`;
 }
 // tell people about badges they just unlocked (checked on this phone)
@@ -854,6 +1065,7 @@ function checkBadges() {
   if (!fresh.length) return;
   badgeSeen = [...new Set([...badgeSeen, ...fresh])];
   try { localStorage.setItem(key, JSON.stringify(badgeSeen)); } catch (e) { }
+  if (fresh.length > 2) { banner({ id: 'bmany', title: `🏅 ${fresh.length} new badges unlocked`, body: 'Open your profile to see them.', badge: true }); return; }
   for (const k of fresh) { const b = BADGES.find(x => x[0] === k); banner({ id: 'b' + k, title: `${b[1]} New badge: ${b[2]}`, body: b[3], badge: true }); }
 }
 
@@ -887,7 +1099,7 @@ function itemCard(o, bill, p, it, editable) {
 function personCard(o, bill, p, canAdd) {
   const items = p.items || [];
   return `<div class="card">
-    <div class="person-head"><div class="initial">${esc(initials(p.name))}</div><div class="grow"><div class="t">${esc(p.name)}${p.id === S.user.uid ? ' <span class="badge accent">You</span>' : ''}${(o.results || {}).gameWinner === p.id ? ' <span class="badge win" title="Lamma Dash champion">🏆</span>' : ''}${(o.results || {}).guessWinner === p.id ? ' <span class="badge win" title="Guessed the check">🎯</span>' : ''}${p.id === o.hostUid ? ' <span class="badge">Host</span>' : (o.coHosts || []).includes(p.id) ? ' <span class="badge">Co-host</span>' : ''}${p.noApp ? ' <span class="badge">Offline</span>' : ''}</div>
+    <div class="person-head">${avatar(p.id, p.name)}<div class="grow"><div class="t">${esc(p.name)}${p.id === S.user.uid ? ' <span class="badge accent">You</span>' : ''}${(o.results || {}).gameWinner === p.id ? ' <span class="badge win" title="Lamma Dash champion">🏆</span>' : ''}${(o.results || {}).guessWinner === p.id ? ' <span class="badge win" title="Guessed the check">🎯</span>' : ''}${p.id === o.hostUid ? ' <span class="badge">Host</span>' : (o.coHosts || []).includes(p.id) ? ' <span class="badge">Co-host</span>' : ''}${p.noApp ? ' <span class="badge">Offline</span>' : ''}</div>
       <div class="sub">${items.length ? plural(sumQty(items), 'item') : 'Hasn\'t ordered yet'}</div></div>
       ${isHost() && p.id !== S.user.uid ? `<button class="mini" data-a="memberSheet" data-id="${p.id}" aria-label="Manage ${esc(p.name)}">${ICON.edit}</button>` : ''}</div>
     ${items.length ? `<div style="margin-top:8px">${items.map(it => {
@@ -902,7 +1114,7 @@ function offlineCard(o, bill, offline) {
   return `<div class="offline">
     <div class="sec-head" style="margin:0 0 10px"><h3>Offline Members</h3><button class="link-btn" data-a="addPerson">${ICON.userPlus} Add Member</button></div>
     ${offline.length ? offline.map(p => `<div class="off-person">
-        <div class="person-head"><div class="initial">${esc(initials(p.name))}</div><div class="grow"><div class="t">${esc(p.name)}</div><div class="sub">${(p.items || []).length ? plural(sumQty(p.items), 'item') : 'No food yet'}</div></div>
+        <div class="person-head">${avatar(p.id, p.name)}<div class="grow"><div class="t">${esc(p.name)}</div><div class="sub">${(p.items || []).length ? plural(sumQty(p.items), 'item') : 'No food yet'}</div></div>
           <button class="mini" data-a="personSheet" data-id="${p.id}" aria-label="Edit">${ICON.edit}</button></div>
         ${(p.items || []).map(it => { const u = bill.unit.item({ ...it, pid: p.id }); return `<div class="item-line tap" data-a="itemSheet" data-p="${p.id}" data-id="${it.id}"><span class="q">${qtyOf(it)}×</span><span class="grow" dir="auto">${esc(it.name)}${(it.extras || []).length ? `<span class="note">+ ${it.extras.map(e => esc(e.name)).join(', ')}</span>` : ''}</span><span class="a">${u == null ? '<span class="muted small">no price</span>' : money(u * qtyOf(it), o.currency)}</span></div>`; }).join('')}
         <button class="add-extra" data-a="itemSheet" data-p="${p.id}">${ICON.plusCircle} Add food for ${esc(p.name)}</button>
@@ -963,7 +1175,7 @@ function checklistPeople(o, bill) {
     ${rows.map(r => {
       const p = r.p, me = p.id === o.hostUid;
       return `<div class="card">
-        <div class="person-head"><div class="initial">${esc(initials(p.name))}</div><div class="grow"><div class="t">${esc(p.name)}${me ? ' <span class="badge">You</span>' : ''}${p.noApp ? ' <span class="badge">Offline</span>' : ''}</div></div><div class="amount">${money(r.total, o.currency)}</div></div>
+        <div class="person-head">${avatar(p.id, p.name)}<div class="grow"><div class="t">${esc(p.name)}${me ? ' <span class="badge">You</span>' : ''}${p.noApp ? ' <span class="badge">Offline</span>' : ''}</div></div><div class="amount">${money(r.total, o.currency)}</div></div>
         <div style="margin-top:8px">${r.lines.length ? r.lines.map(l => `<div class="item-line"><span class="q">${l.q}×</span><span class="grow" dir="auto">${esc(l.n)}${l.split ? ` <span class="muted small">(shared by ${l.split})</span>` : ''}${l.note ? `<span class="note" dir="auto">${esc(l.note)}</span>` : ''}</span>
             ${l.shared ? `<span class="a">${l.u == null ? '–' : money(l.a, o.currency)}</span>` : `<button class="price-btn ${l.u == null ? 'missing' : ''} ${l.over ? 'over' : ''}" data-a="priceSheet" data-p="${p.id}" data-id="${l.id}">${l.u == null ? 'Set price' : money(l.a, o.currency)}</button>`}</div>`).join('')
             + r.extras.map(x => `<div class="item-line sub-line"><span class="q"></span><span class="grow" dir="auto">+ ${esc(x.n)} <span class="muted small">on ${esc(x.on)}</span></span><span class="a">${x.u == null ? '–' : money(x.a, o.currency)}</span></div>`).join('') : '<p class="sub">No food yet</p>'}</div>
@@ -1441,10 +1653,11 @@ function sheetOrderMenu() {
 }
 function sheetHelp() { openSheet(`<h2>How Lamma works</h2>${HELP}<button class="btn primary block" data-a="closeSheet">Got it</button>`); }
 function sheetHomeMenu() {
-  openSheet(`<h2>Lamma</h2><div class="card flush" style="margin-top:10px">
+  openSheet(`<h2 class="ar-name">لمَّة</h2><div class="card flush" style="margin-top:10px">
     <div class="list-row tap" data-a="go" data-v="profile"><span style="font-size:22px">🏆</span><div class="grow"><div class="t">My profile and badges</div><div class="sub">Achievements and game wins</div></div></div>
     <div class="list-row tap" data-a="go" data-v="menus">${ICON.photo.replace('<svg', '<svg width="22" height="22"')}<div class="grow"><div class="t">Saved menus</div><div class="sub">${plural(S.menus.length, 'menu')}</div></div></div>
     <div class="list-row tap" data-a="go" data-v="settings">${ICON.edit.replace('<svg', '<svg width="22" height="22"')}<div class="grow"><div class="t">Settings</div><div class="sub">Name, payment link, dark mode</div></div></div>
+    <div class="list-row tap" data-a="helpSheet">${ICON.help.replace('<svg', '<svg width="22" height="22"')}<div class="grow"><div class="t">How Lamma works</div><div class="sub">A quick guide</div></div></div>
   </div>`);
 }
 
@@ -1542,7 +1755,7 @@ const A = {
     if (btn) A.useMenu(btn);
   },
   deleteMenu: async () => {
-    if (!confirm('Delete this menu and its photos?')) return;
+    if (!await ask({ title: 'Delete this menu?', body: 'Its photos will be deleted too.', ok: 'Delete', danger: true, icon: ICON.trash })) return;
     const id = $('.sheet')._st.menuId;
     const ph = await FB.getDocs(C('menus', id, 'photos'));
     for (const d of ph.docs) await FB.deleteDoc(d.ref);
@@ -1600,7 +1813,7 @@ const A = {
   },
   confirmDeliver: async () => {
     const bill = computeBill(S.order, S.people);
-    if (bill.missing && !confirm(`${plural(bill.missing, 'price')} still missing and will count as 0. Deliver anyway?`)) return;
+    if (bill.missing && !await ask({ title: `${plural(bill.missing, 'price')} still missing`, body: 'Missing prices count as 0 in the bill. Deliver anyway?', ok: 'Deliver anyway' })) return;
     await upd({ stage: 'delivered', open: false, deliveredAt: Date.now() });
     const o = S.order;
     await decideWinners(o, bill.grand);
@@ -1672,7 +1885,7 @@ const A = {
   renamePerson: async el => { const name = $('#ps-name').value.trim(); if (!name) return; await FB.updateDoc(D('orders', S.order.id, 'people', el.dataset.id), { name }); closeSheet(); },
   removePerson: async el => {
     const p = S.people.find(x => x.id === el.dataset.id);
-    if (!p || !(p.noApp || isMainHost()) || !confirm(`Remove ${p.name} and their food from this order?`)) return;
+    if (!p || !(p.noApp || isMainHost()) || !await ask({ title: `Remove ${p.name}?`, body: 'Their food will be removed from this order too.', ok: 'Remove', danger: true, icon: ICON.trash })) return;
     if (!p.noApp) { notifyUsers([p.id], { type: 'removed', title: `You were removed from ${S.order.place}`, body: `${S.profile.name} removed you from the order.` }); upd({ coHosts: FB.arrayRemove(p.id) }); }
     await FB.deleteDoc(D('orders', S.order.id, 'people', p.id));
     await upd({ shared: (S.order.shared || []).map(s => ({ ...s, sharers: (s.sharers || []).filter(x => x !== p.id) })) });
@@ -1724,7 +1937,7 @@ const A = {
   },
   deleteItem: async el => {
     const p = personFor(el.dataset.p), it = p && (p.items || []).find(i => i.id === el.dataset.id);
-    if (!it || !confirm(`Remove ${it.name}?`)) return;
+    if (!it || !await ask({ title: 'Remove this item?', body: `${qtyOf(it)} × ${it.name}`, ok: 'Remove', danger: true, icon: ICON.trash })) return;
     if (await changeItems(p.id, items => items.splice(items.findIndex(i => i.id === it.id), 1), `removed ${it.name}`)) closeSheet();
   },
   extraSheet: el => sheetExtra(el.dataset.p, el.dataset.id, el.dataset.x || null),
@@ -1745,7 +1958,7 @@ const A = {
     if (it) it.extras = it.extras.filter(x => x.id !== el.dataset.x);
   }),
   leaveOrder: async () => {
-    if (!confirm('Leave this order? Your food will be removed.')) return;
+    if (!await ask({ title: 'Leave this order?', body: 'Your food will be removed from it.', ok: 'Leave', danger: true })) return;
     closeSheet();
     const uid = S.user.uid, id = S.order.id;
     notifyUsers(hostsOf(S.order), { type: 'left', title: `${S.profile.name} left ${S.order.place}`, body: 'Their food was removed from the order.' });
@@ -1795,7 +2008,7 @@ const A = {
     else { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' })); a.download = name; a.click(); }
   },
   deleteOrder: async () => {
-    if (!confirm('Delete this order for everyone? This cannot be undone.')) return;
+    if (!await ask({ title: 'Delete this order?', body: 'It will be deleted for everyone. This cannot be undone.', ok: 'Delete', danger: true, icon: ICON.trash })) return;
     const o = S.order;
     closeSheet(); stop('order');
     try {
@@ -1823,6 +2036,7 @@ const A = {
     window.LammaDash.start({
       best: mine ? mine.best : 0,
       onEnd: score => {
+        if (score > num(S.profile.dashBest)) { S.profile.dashBest = score; FB.updateDoc(D('users', uid), { dashBest: score }).catch(() => { }); }
         const cur = S.scores.find(x => x.id === uid);
         if (score > 0 && (!cur || score > cur.best) && !delivered(S.order))
           FB.setDoc(D('orders', o.id, 'scores', uid), { name: S.profile.name, best: score, at: Date.now() }).catch(e => console.warn('score', e));
@@ -1836,8 +2050,33 @@ const A = {
     catch (e) { toast(delivered(S.order) ? 'The order was already delivered.' : 'Could not save. Check your internet.'); }
   },
   linkGoogle: () => linkGoogle(),
+  search: () => { closeSheet(); openSearch(); },
+  closeSearch: () => closeSearch(),
+  reload: () => {
+    try { sessionStorage.setItem('lamma.reopen', S.view === 'order' && S.order ? S.order.id : ''); } catch (e) { }
+    remember(); location.reload();
+  },
+  badgeFilter: el => { S.badgeFilter = el.dataset.v; render(); },
+  avatarSheet: () => sheetAvatar(),
+  avPick: el => {
+    const d = S.avDraft, k = el.dataset.k;
+    if (k === 'init') { d.photo = ''; d.e = ''; }
+    else if (k === 'e') { d.photo = ''; d.e = el.dataset.v; }
+    else { d.photo = ''; d.c = el.dataset.v; }
+    avPreview();
+  },
+  avPhoto: () => {
+    const i = document.createElement('input'); i.type = 'file'; i.accept = 'image/*';
+    i.onchange = async () => { const f = i.files[0]; if (!f) return; try { S.avDraft.photo = await photoToAvatar(f); avPreview(); } catch (e) { toast("Couldn't read that photo"); } };
+    i.click();
+  },
+  avSave: async () => {
+    const d = S.avDraft, a = d.photo ? { photo: d.photo } : d.e ? { e: d.e, c: d.c } : { c: d.c };
+    try { await FB.updateDoc(D('users', S.user.uid), { avatar: a }); S.profile.avatar = a; closeSheet(); render(); toast('Profile picture saved'); }
+    catch (e) { toast("Couldn't save. Check your connection."); }
+  },
   theme: el => { try { localStorage.setItem('lamma.theme', el.dataset.v); } catch (e) { } applyTheme(); render(); },
-  signOut: () => { if (confirm('Sign out of Lamma?')) FB.signOut(auth); },
+  signOut: async () => { if (await ask({ title: 'Sign out of Lamma?', body: 'Your orders stay saved in your account. Sign in again any time to see them.', ok: 'Sign out' })) FB.signOut(auth); },
 };
 
 document.addEventListener('click', e => {

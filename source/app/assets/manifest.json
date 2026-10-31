@@ -1,10 +1,21 @@
 {
-  "name": "Lamma",
-  "short_name": "Lamma",
+  "name": "لمَّة Lamma",
+  "short_name": "لمَّة",
   "description": "Order food together and split the bill.",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#FAFAF9",
   "theme_color": "#E8552D",
-  "icons": [{ "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }, { "src": "icon-180.png", "sizes": "180x180", "type": "image/png" }]
+  "icons": [
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
 }
