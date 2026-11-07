@@ -59,7 +59,7 @@
   let music = null, musicUrl = null;
   function getMusic() {
     if (music) return Promise.resolve(music);
-    return fetch('audio/dash.mp3').then(r => r.blob()).then(b => {
+    return fetch('audio/dash2.mp3').then(r => r.blob()).then(b => {
       musicUrl = URL.createObjectURL(b); music = new Audio(musicUrl); music.loop = true; music.volume = 0.55; return music;
     }).catch(() => null);
   }
@@ -106,13 +106,15 @@
     function pickRider() {
       const was = state; if (state === 'run') state = 'paused';
       const d = document.createElement('div'); d.className = 'rider-pick';
-      d.innerHTML = `<div class="rp-box"><b>Choose your rider</b><div class="rp-grid">${RIDERS.map((r, i) => `<button data-i="${i}" class="${i === rider ? 'on' : ''}">${r ? `<img src="${thumb(i)}" alt="">` : '<span>🛵</span>'}</button>`).join('')}</div></div>`;
+      d.innerHTML = `<div class="rp-box"><b>Choose your character</b><div class="rp-grid">${RIDERS.map((r, i) => `<button data-i="${i}" class="${i === rider ? 'on' : ''}">${r ? `<img src="${thumb(i)}" alt="">` : '<span>🛵</span>'}</button>`).join('')}</div></div>`;
       d.addEventListener('pointerdown', e => {
         e.stopPropagation(); const b = e.target.closest('[data-i]');
         if (b) { rider = +b.dataset.i; store('lamma.rider', String(rider)); showRiderBtn(); }
         if (b || e.target === d) { d.remove(); if (was === 'run') { state = 'run'; last = performance.now(); } }
       });
       wrap.appendChild(d);
+      // faces still loading on a first open: redraw those thumbnails when they arrive
+      heads.forEach((h, i) => { if (h && !h.complete) h.addEventListener('load', () => { const im = d.querySelector(`[data-i="${i}"] img`); if (im) im.src = thumb(i); }, { once: true }); });
     }
     riderBtn.addEventListener('pointerdown', e => { e.stopPropagation(); pickRider(); });
     musicBtn.addEventListener('pointerdown', e => { e.stopPropagation(); musicOn = !musicOn; store('lamma.music', musicOn ? 'on' : 'off'); showMusicBtn(); if (musicOn && state !== 'ready') playMusic(); else stopMusic(); });
@@ -349,6 +351,7 @@
       draw(dt);
     }
     raf = requestAnimationFrame(step);
+    pickRider(); // choose your character before every game
     const onKey = e => { if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); } };
     const onTap = e => { if (e.target.closest('#g-close')) return; e.preventDefault(); jump(); };
     // pause when the app goes to the background
