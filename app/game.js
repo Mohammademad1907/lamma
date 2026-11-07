@@ -10,7 +10,7 @@
   // the riders: friends drawn with big cartoon heads on the scooter (index 0 = the plain scooter)
   const SHIRTS = ['#f4f1ec', '#e9dcc3', '#f7f7f5', '#1f2a44', '#1c1c1c', '#a8324a', '#1f2a44', '#c9d6e3', '#252b3d', '#b8b4b4', '#4b5056'];
   const PANTS = ['#3b4a6b', '#efe9dd', '#232326', '#232326', '#2a2a2d', '#2f3b55', '#232326', '#c9d6e3', '#2a3142', '#2b3340', '#3a3f46'];
-  const RIDERS = [null].concat(SHIRTS.map((shirt, i) => ({ src: `riders/r${i + 1}.webp`, shirt, pants: PANTS[i] })));
+  const RIDERS = [null].concat(SHIRTS.map((shirt, i) => ({ src: `riders/r${i + 1}.webp?v=3`, shirt, pants: PANTS[i] })));
   const INK = '#1c1917', SKIN = '#c98e6a';
   /* A cartoon rider on Lamma's own delivery scooter, drawn facing right with (0,0) where the wheels touch the road.
      t moves the wheels and legs; the big head is the friend's cartoon face. */
