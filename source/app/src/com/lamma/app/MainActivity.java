@@ -55,6 +55,7 @@ public class MainActivity extends Activity {
         s.setDatabaseEnabled(true);
         s.setAllowFileAccess(false);
         s.setTextZoom(100);
+        s.setMediaPlaybackRequiresUserGesture(false);
 
         web.addJavascriptInterface(new Bridge(), "LammaNative");
         web.setWebViewClient(new WebViewClient() {
@@ -114,6 +115,9 @@ public class MainActivity extends Activity {
         if (path.endsWith(".svg")) return "image/svg+xml";
         if (path.endsWith(".png")) return "image/png";
         if (path.endsWith(".json")) return "application/json";
+        if (path.endsWith(".webp")) return "image/webp";
+        if (path.endsWith(".mp3")) return "audio/mpeg";
+        if (path.endsWith(".woff2")) return "font/woff2";
         return "application/octet-stream";
     }
 

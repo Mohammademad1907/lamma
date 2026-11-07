@@ -7,6 +7,19 @@
   const GROUND = ['🚧', '📦', '🛢️', '🐈', '🗑️'];
   const AIR = ['🐦', '🕊️'];
   const FOOD = ['🍔', '🍕', '🌯', '🥤', '🍟', '🍩', '🌮', '🍗'];
+  // the riders: friends drawn with big cartoon heads on the scooter (index 0 = the plain scooter)
+  const SHIRTS = ['#f4f1ec', '#e9dcc3', '#f7f7f5', '#1f2a44', '#1c1c1c', '#a8324a', '#1f2a44', '#c9d6e3', '#252b3d', '#b8b4b4', '#4b5056'];
+  const RIDERS = [null].concat(SHIRTS.map((shirt, i) => ({ src: `riders/r${i + 1}.webp`, shirt })));
+  const heads = RIDERS.map(r => { if (!r) return null; const im = new Image(); im.src = r.src; return im; });
+  const store = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { } return null; };
+  // background music: loaded once as a blob so it plays the same in the browser and the Android app
+  let music = null, musicUrl = null;
+  function getMusic() {
+    if (music) return Promise.resolve(music);
+    return fetch('audio/dash.mp3').then(r => r.blob()).then(b => {
+      musicUrl = URL.createObjectURL(b); music = new Audio(musicUrl); music.loop = true; music.volume = 0.55; return music;
+    }).catch(() => null);
+  }
   const POWERS = { shield: '🛡️', magnet: '🧲', double: '⭐' };
   const GRAV = 2600;
   const rnd = (a, b) => a + Math.random() * (b - a);
@@ -22,6 +35,8 @@
     wrap.className = 'game';
     wrap.innerHTML = `<div class="game-bar"><div><b>Lamma Dash</b><span class="sub" id="g-best">Best: ${o.best || 0}</span></div>
         <div class="game-score" id="g-score">0</div>
+        <button class="icon-btn g-rider" id="g-rider" aria-label="Choose rider"></button>
+        <button class="icon-btn" id="g-music" aria-label="Music"></button>
         <button class="icon-btn" id="g-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <canvas id="g-canvas"></canvas>
       <p class="game-help">Tap to jump · tap again in the air to double jump</p>`;
@@ -30,6 +45,28 @@
     if (!ctx.roundRect) ctx.roundRect = function (x, y, w, h) { this.rect(x, y, w, h); };
     const scoreEl = wrap.querySelector('#g-score'), bestEl = wrap.querySelector('#g-best');
     let W = 0, H = 0, G = 0;
+    let rider = Math.max(0, Math.min(RIDERS.length - 1, parseInt(store('lamma.rider') || '1', 10) || 0));
+    let musicOn = store('lamma.music') !== 'off';
+    const riderBtn = wrap.querySelector('#g-rider'), musicBtn = wrap.querySelector('#g-music');
+    const showRiderBtn = () => { riderBtn.innerHTML = rider ? `<img src="${RIDERS[rider].src}" alt="">` : '<span style="font-size:22px">🛵</span>'; };
+    const SPK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9z"/>';
+    const showMusicBtn = () => { musicBtn.innerHTML = SPK + (musicOn ? '<path d="M16 9a4 4 0 010 6M18.5 6.5a8 8 0 010 11"/></svg>' : '<path d="M17 9l5 6M22 9l-5 6"/></svg>'); };
+    showRiderBtn(); showMusicBtn();
+    function playMusic() { if (!musicOn) return; getMusic().then(m => { if (m && musicOn && document.body.contains(wrap)) m.play().catch(() => { }); }); }
+    function stopMusic() { if (music) music.pause(); }
+    function pickRider() {
+      const was = state; if (state === 'run') state = 'paused';
+      const d = document.createElement('div'); d.className = 'rider-pick';
+      d.innerHTML = `<div class="rp-box"><b>Choose your rider</b><div class="rp-grid">${RIDERS.map((r, i) => `<button data-i="${i}" class="${i === rider ? 'on' : ''}">${r ? `<img src="${r.src}" alt="">` : '<span>🛵</span>'}</button>`).join('')}</div></div>`;
+      d.addEventListener('pointerdown', e => {
+        e.stopPropagation(); const b = e.target.closest('[data-i]');
+        if (b) { rider = +b.dataset.i; store('lamma.rider', String(rider)); showRiderBtn(); }
+        if (b || e.target === d) { d.remove(); if (was === 'run') { state = 'run'; last = performance.now(); } }
+      });
+      wrap.appendChild(d);
+    }
+    riderBtn.addEventListener('pointerdown', e => { e.stopPropagation(); pickRider(); });
+    musicBtn.addEventListener('pointerdown', e => { e.stopPropagation(); musicOn = !musicOn; store('lamma.music', musicOn ? 'on' : 'off'); showMusicBtn(); if (musicOn && state !== 'ready') playMusic(); else stopMusic(); });
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     let city = [], hills = [];
     function size() {
@@ -64,7 +101,7 @@
     function jump() {
       if (state === 'ready' || state === 'over') {
         if (state === 'over' && Date.now() - overAt < 600) return;
-        reset(); state = 'run'; last = performance.now(); return;
+        reset(); state = 'run'; last = performance.now(); playMusic(); return;
       }
       if (state !== 'run') return;
       if (onGround()) { P.vy = -Math.sqrt(2 * GRAV * Math.min(140, H * 0.3)); P.jumps = 1; burst(P.x - 10, G, '#a8a29e', 6, 90); }
@@ -78,7 +115,7 @@
     function spawn() {
       // ground obstacles, sometimes in pairs; birds fly at head height once it gets going
       if (nextObs <= 0) {
-        if (dist > 2500 && Math.random() < 0.28) items.push({ k: 'obs', ch: pick(AIR), x: W + 40, y: G - rnd(62, 92), s: 32, fly: true, ph: rnd(0, 6) });
+        if (dist > 2500 && Math.random() < 0.28) items.push({ k: 'obs', ch: pick(AIR), x: W + 40, y: G - (rider ? rnd(96, 118) : rnd(62, 92)), s: 32, fly: true, ph: rnd(0, 6) });
         else {
           items.push({ k: 'obs', ch: pick(GROUND), x: W + 40, y: G, s: 34 });
           if (dist > 1500 && Math.random() < 0.3) items.push({ k: 'obs', ch: pick(GROUND), x: W + 72, y: G, s: 34 });
@@ -126,7 +163,7 @@
       }
       items = items.filter(it => it.x > -60 && !it.gone);
       // collisions, with boxes a bit smaller than the drawings so it feels fair
-      const px1 = P.x - 15, px2 = P.x + 15, py1 = P.y - 36, py2 = P.y - 4;
+      const px1 = P.x - 15, px2 = P.x + 15, py1 = P.y - (rider ? 74 : 36), py2 = P.y - 4;
       for (const it of items) {
         const r = it.s * 0.32, ix1 = it.x - r, ix2 = it.x + r, iy1 = it.y - it.s * 0.85, iy2 = it.y - 3;
         if (!(px1 < ix2 && px2 > ix1 && py1 < iy2 && py2 > iy1)) continue;
@@ -196,6 +233,20 @@
         if (night > 0.2) { ctx.fillStyle = `rgba(255,220,140,${night * 0.25})`; ctx.beginPath(); ctx.moveTo(x - 10, G - 116); ctx.lineTo(x - 40, G - 6); ctx.lineTo(x + 24, G - 6); ctx.lineTo(x + 6, G - 116); ctx.fill(); }
       }
     }
+    // scooter, a little body on the seat with an arm to the handlebar, then the big cartoon head
+    function drawRider(x, y, tilt) {
+      const r = RIDERS[rider], wob = state === 'run' ? Math.sin(dist / 22) * 0.06 : 0;
+      ctx.save(); ctx.translate(x, y); ctx.rotate(tilt);
+      emoji('🛵', 0, 0, P.size, true);
+      ctx.fillStyle = r.shirt; ctx.strokeStyle = 'rgba(20,16,18,.85)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect(-16, -50, 20, 26, 8); ctx.fill(); ctx.stroke();
+      ctx.lineCap = 'round'; ctx.lineWidth = 6; ctx.strokeStyle = r.shirt;
+      ctx.beginPath(); ctx.moveTo(-2, -44); ctx.lineTo(14, -36); ctx.stroke();
+      ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(20,16,18,.85)'; ctx.beginPath(); ctx.arc(15, -36, 3.2, 0, 7); ctx.fillStyle = '#d9a07a'; ctx.fill(); ctx.stroke();
+      ctx.translate(-5, -62); ctx.rotate(wob);
+      ctx.drawImage(heads[rider], -27, -29, 54, 54);
+      ctx.restore();
+    }
     function draw(dt) {
       ctx.save();
       if (shake > 0) { ctx.translate(rnd(-shake, shake), rnd(-shake, shake)); shake = Math.max(0, shake - dt * 40); }
@@ -210,7 +261,8 @@
       ctx.fillStyle = `rgba(0,0,0,${Math.max(0.06, 0.22 - air / 600)})`; ctx.beginPath(); ctx.ellipse(P.x, G - 2, Math.max(8, 20 - air / 12), 5, 0, 0, 7); ctx.fill();
       if (shield) { ctx.strokeStyle = 'rgba(96,165,250,.9)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(P.x, P.y - 22, 32 + Math.sin(dist / 30) * 2, 0, 7); ctx.stroke(); }
       const bob = onGround() && state === 'run' ? Math.sin(dist / 18) * 1.5 : 0;
-      emoji('🛵', P.x, P.y + 4 + bob, P.size, true, P.tilt);
+      if (rider && heads[rider].complete && heads[rider].naturalWidth) drawRider(P.x, P.y + 4 + bob, P.tilt);
+      else emoji('🛵', P.x, P.y + 4 + bob, P.size, true, P.tilt);
       // particles and floating texts
       for (const q of parts) { q.t += dt; q.x += q.vx * dt; q.y += q.vy * dt; q.vy += 600 * dt; ctx.globalAlpha = Math.max(0, 1 - q.t / q.life); ctx.fillStyle = q.color; ctx.beginPath(); ctx.arc(q.x, q.y, q.r, 0, 7); ctx.fill(); }
       parts = parts.filter(q => q.t < q.life); ctx.globalAlpha = 1;
@@ -258,7 +310,7 @@
     const onKey = e => { if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); } };
     const onTap = e => { if (e.target.closest('#g-close')) return; e.preventDefault(); jump(); };
     // pause when the app goes to the background
-    const onHide = () => { if (document.hidden && state === 'run') { state = 'paused'; } else if (!document.hidden && state === 'paused') { state = 'run'; last = performance.now(); } };
+    const onHide = () => { if (document.hidden) { stopMusic(); if (state === 'run') state = 'paused'; } else { if (state === 'paused' && !wrap.querySelector('.rider-pick')) { state = 'run'; last = performance.now(); } if (state === 'run') playMusic(); } };
     wrap.addEventListener('pointerdown', onTap);
     document.addEventListener('keydown', onKey);
     document.addEventListener('visibilitychange', onHide);
@@ -268,6 +320,7 @@
       document.removeEventListener('visibilitychange', onHide);
       window.removeEventListener('resize', size);
       if (state === 'run' && o.onEnd && score > 0) o.onEnd(score);
+      stopMusic();
       wrap.remove();
       if (o.onClose) o.onClose();
     }
