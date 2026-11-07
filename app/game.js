@@ -9,7 +9,50 @@
   const FOOD = ['🍔', '🍕', '🌯', '🥤', '🍟', '🍩', '🌮', '🍗'];
   // the riders: friends drawn with big cartoon heads on the scooter (index 0 = the plain scooter)
   const SHIRTS = ['#f4f1ec', '#e9dcc3', '#f7f7f5', '#1f2a44', '#1c1c1c', '#a8324a', '#1f2a44', '#c9d6e3', '#252b3d', '#b8b4b4', '#4b5056'];
-  const RIDERS = [null].concat(SHIRTS.map((shirt, i) => ({ src: `riders/r${i + 1}.webp`, shirt })));
+  const PANTS = ['#3b4a6b', '#efe9dd', '#232326', '#232326', '#2a2a2d', '#2f3b55', '#232326', '#c9d6e3', '#2a3142', '#2b3340', '#3a3f46'];
+  const RIDERS = [null].concat(SHIRTS.map((shirt, i) => ({ src: `riders/r${i + 1}.webp`, shirt, pants: PANTS[i] })));
+  const INK = '#1c1917', SKIN = '#c98e6a';
+  /* A cartoon rider on Lamma's own delivery scooter, drawn facing right with (0,0) where the wheels touch the road.
+     t moves the wheels and legs; the big head is the friend's cartoon face. */
+  function drawCharacter(c, r, head, t, wob) {
+    c.save(); c.lineJoin = 'round'; c.lineCap = 'round'; c.strokeStyle = INK; c.lineWidth = 2.6;
+    const shape = (fill, f) => { c.beginPath(); f(); c.fillStyle = fill; c.fill(); c.stroke(); };
+    // delivery box on the back
+    shape('#E8552D', () => c.roundRect(-46, -58, 26, 24, 5));
+    c.fillStyle = '#fff'; c.font = '13px Lalezar, system-ui'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('\u0644\u0645\u0651\u064E\u0629', -33, -45);
+    // wheels
+    for (const wx of [-26, 26]) {
+      shape('#2b2b2e', () => c.arc(wx, -10, 10, 0, 7));
+      c.fillStyle = '#d6d3d1'; c.beginPath(); c.arc(wx, -10, 4, 0, 7); c.fill();
+      c.strokeStyle = '#78716c'; c.lineWidth = 1.6; c.beginPath(); c.moveTo(wx + Math.cos(t) * 4, -10 + Math.sin(t) * 4); c.lineTo(wx - Math.cos(t) * 4, -10 - Math.sin(t) * 4); c.stroke();
+      c.strokeStyle = INK; c.lineWidth = 2.6;
+    }
+    // scooter body: rear cowl, floorboard and the front shield up to the handlebar
+    shape('#E8552D', () => { c.moveTo(-40, -16); c.quadraticCurveTo(-42, -36, -18, -36); c.lineTo(-4, -36); c.quadraticCurveTo(0, -26, -6, -20); c.lineTo(14, -20); c.lineTo(20, -46); c.lineTo(28, -46); c.quadraticCurveTo(36, -28, 36, -16); c.closePath(); });
+    shape('#fde7d9', () => c.roundRect(-24, -40, 26, 6, 3)); // seat
+    c.beginPath(); c.moveTo(22, -46); c.lineTo(26, -60); c.stroke();
+    c.lineWidth = 3.4; c.beginPath(); c.moveTo(20, -60); c.lineTo(32, -61); c.stroke(); c.lineWidth = 2.6;
+    shape('#fef3c7', () => c.arc(34, -38, 4, 0, 7)); // headlight
+    // legs: thigh on the seat, shin down to the floorboard, a pedal-like bounce
+    const k = Math.sin(t * 0.5) * 1.5;
+    c.lineWidth = 9; c.strokeStyle = INK;
+    c.beginPath(); c.moveTo(-10, -42); c.lineTo(8, -40 + k); c.lineTo(10, -24); c.stroke();
+    c.lineWidth = 6.2; c.strokeStyle = r.pants;
+    c.beginPath(); c.moveTo(-10, -42); c.lineTo(8, -40 + k); c.lineTo(10, -24); c.stroke();
+    c.strokeStyle = INK; c.lineWidth = 2.6;
+    shape('#f5f5f4', () => c.roundRect(6, -26, 13, 7, 3)); // shoe
+    // body leaning forward
+    shape(r.shirt, () => { c.moveTo(-18, -42); c.quadraticCurveTo(-20, -66, -6, -70); c.quadraticCurveTo(8, -70, 8, -58); c.lineTo(2, -42); c.closePath(); });
+    // arm reaching the handlebar
+    c.lineWidth = 8.6; c.beginPath(); c.moveTo(-2, -64); c.lineTo(12, -56); c.lineTo(22, -61); c.stroke();
+    c.lineWidth = 5.6; c.strokeStyle = r.shirt; c.beginPath(); c.moveTo(-2, -64); c.lineTo(12, -56); c.lineTo(19, -60); c.stroke();
+    c.strokeStyle = INK; c.lineWidth = 2.2; shape(SKIN, () => c.arc(23, -61, 3.6, 0, 7));
+    // neck and the big head
+    shape(SKIN, () => c.roundRect(-9, -76, 9, 9, 3));
+    c.translate(-4, -96); c.rotate(wob || 0);
+    if (head) c.drawImage(head, -33, -36, 66, 66);
+    c.restore();
+  }
   const heads = RIDERS.map(r => { if (!r) return null; const im = new Image(); im.src = r.src; return im; });
   const store = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { } return null; };
   // background music: loaded once as a blob so it plays the same in the browser and the Android app
@@ -54,10 +97,16 @@
     showRiderBtn(); showMusicBtn();
     function playMusic() { if (!musicOn) return; getMusic().then(m => { if (m && musicOn && document.body.contains(wrap)) m.play().catch(() => { }); }); }
     function stopMusic() { if (music) music.pause(); }
+    function thumb(i) {
+      const c = document.createElement('canvas'); c.width = c.height = 240; const x = c.getContext('2d');
+      if (!x.roundRect) x.roundRect = function (a, b, w, h) { this.rect(a, b, w, h); };
+      x.translate(120, 214); x.scale(1.55, 1.55); drawCharacter(x, RIDERS[i], heads[i].complete ? heads[i] : null, 0, 0);
+      return c.toDataURL('image/png');
+    }
     function pickRider() {
       const was = state; if (state === 'run') state = 'paused';
       const d = document.createElement('div'); d.className = 'rider-pick';
-      d.innerHTML = `<div class="rp-box"><b>Choose your rider</b><div class="rp-grid">${RIDERS.map((r, i) => `<button data-i="${i}" class="${i === rider ? 'on' : ''}">${r ? `<img src="${r.src}" alt="">` : '<span>🛵</span>'}</button>`).join('')}</div></div>`;
+      d.innerHTML = `<div class="rp-box"><b>Choose your rider</b><div class="rp-grid">${RIDERS.map((r, i) => `<button data-i="${i}" class="${i === rider ? 'on' : ''}">${r ? `<img src="${thumb(i)}" alt="">` : '<span>🛵</span>'}</button>`).join('')}</div></div>`;
       d.addEventListener('pointerdown', e => {
         e.stopPropagation(); const b = e.target.closest('[data-i]');
         if (b) { rider = +b.dataset.i; store('lamma.rider', String(rider)); showRiderBtn(); }
@@ -115,7 +164,7 @@
     function spawn() {
       // ground obstacles, sometimes in pairs; birds fly at head height once it gets going
       if (nextObs <= 0) {
-        if (dist > 2500 && Math.random() < 0.28) items.push({ k: 'obs', ch: pick(AIR), x: W + 40, y: G - (rider ? rnd(96, 118) : rnd(62, 92)), s: 32, fly: true, ph: rnd(0, 6) });
+        if (dist > 2500 && Math.random() < 0.28) items.push({ k: 'obs', ch: pick(AIR), x: W + 40, y: G - (rider ? rnd(122, 140) : rnd(62, 92)), s: 32, fly: true, ph: rnd(0, 6) });
         else {
           items.push({ k: 'obs', ch: pick(GROUND), x: W + 40, y: G, s: 34 });
           if (dist > 1500 && Math.random() < 0.3) items.push({ k: 'obs', ch: pick(GROUND), x: W + 72, y: G, s: 34 });
@@ -163,7 +212,7 @@
       }
       items = items.filter(it => it.x > -60 && !it.gone);
       // collisions, with boxes a bit smaller than the drawings so it feels fair
-      const px1 = P.x - 15, px2 = P.x + 15, py1 = P.y - (rider ? 74 : 36), py2 = P.y - 4;
+      const px1 = P.x - 15, px2 = P.x + 15, py1 = P.y - (rider ? 98 : 36), py2 = P.y - 4;
       for (const it of items) {
         const r = it.s * 0.32, ix1 = it.x - r, ix2 = it.x + r, iy1 = it.y - it.s * 0.85, iy2 = it.y - 3;
         if (!(px1 < ix2 && px2 > ix1 && py1 < iy2 && py2 > iy1)) continue;
@@ -235,16 +284,9 @@
     }
     // scooter, a little body on the seat with an arm to the handlebar, then the big cartoon head
     function drawRider(x, y, tilt) {
-      const r = RIDERS[rider], wob = state === 'run' ? Math.sin(dist / 22) * 0.06 : 0;
-      ctx.save(); ctx.translate(x, y); ctx.rotate(tilt);
-      emoji('🛵', 0, 0, P.size, true);
-      ctx.fillStyle = r.shirt; ctx.strokeStyle = 'rgba(20,16,18,.85)'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.roundRect(-16, -50, 20, 26, 8); ctx.fill(); ctx.stroke();
-      ctx.lineCap = 'round'; ctx.lineWidth = 6; ctx.strokeStyle = r.shirt;
-      ctx.beginPath(); ctx.moveTo(-2, -44); ctx.lineTo(14, -36); ctx.stroke();
-      ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(20,16,18,.85)'; ctx.beginPath(); ctx.arc(15, -36, 3.2, 0, 7); ctx.fillStyle = '#d9a07a'; ctx.fill(); ctx.stroke();
-      ctx.translate(-5, -62); ctx.rotate(wob);
-      ctx.drawImage(heads[rider], -27, -29, 54, 54);
+      const wob = state === 'run' ? Math.sin(dist / 22) * 0.06 : 0;
+      ctx.save(); ctx.translate(x, y - 2); ctx.rotate(tilt); ctx.scale(0.86, 0.86);
+      drawCharacter(ctx, RIDERS[rider], heads[rider], dist / 10, wob);
       ctx.restore();
     }
     function draw(dt) {

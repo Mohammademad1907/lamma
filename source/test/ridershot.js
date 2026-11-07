@@ -12,7 +12,7 @@ const srv = http.createServer((q, r) => fs.readFile(path.join(ROOT, q.url.split(
   await p.evaluate(() => LammaDash.start({ best: 420 }));
   await p.waitForTimeout(600); await p.screenshot({ path: 'shots6/r1-ready.png' });
   await p.click('#g-rider'); await p.waitForTimeout(400); await p.screenshot({ path: 'shots6/r2-pick.png' });
-  await p.click('.rp-grid [data-i="8"]'); await p.waitForTimeout(200);
+  await p.click('.rp-grid [data-i="5"]'); await p.waitForTimeout(200);
   await p.mouse.click(200, 400);
   for (let i = 0; i < 6; i++) { await p.waitForTimeout(400); await p.mouse.click(200, 400); }
   await p.waitForTimeout(150); await p.screenshot({ path: 'shots6/r3-run.png' });
