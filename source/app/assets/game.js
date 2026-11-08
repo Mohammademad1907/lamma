@@ -7,14 +7,17 @@
   const GROUND = ['🚧', '📦', '🛢️', '🐈', '🗑️'];
   const AIR = ['🐦', '🕊️'];
   const FOOD = ['🍔', '🍕', '🌯', '🥤', '🍟', '🍩', '🌮', '🍗'];
-  // the riders: friends drawn with big cartoon heads on the scooter (index 0 = the plain scooter)
-  const SHIRTS = ['#f4f1ec', '#e9dcc3', '#f7f7f5', '#1f2a44', '#1c1c1c', '#a8324a', '#1f2a44', '#c9d6e3', '#252b3d', '#b8b4b4', '#4b5056'];
-  const PANTS = ['#3b4a6b', '#efe9dd', '#232326', '#232326', '#2a2a2d', '#2f3b55', '#232326', '#c9d6e3', '#2a3142', '#2b3340', '#3a3f46'];
-  const RIDERS = [null].concat(SHIRTS.map((shirt, i) => ({ src: `riders/r${i + 1}.webp?v=3`, shirt, pants: PANTS[i] })));
+  // the riders: the friends' caricature heads on Lamma's own scooter (index 0 = the plain scooter emoji)
+  const NAMES = ['s7s', 'Yasser', 'Omda', 'Adham', 'Zeemo', 'Maro', 'Amr', 'Ali', 'Shaarawy', 'Bassel', 'Baraa', 'Omar'];
+  // clothes from each friend's picture: shirt, then trousers
+  const CLOTHES = [['#3a3d44', '#2a2a2d'], ['#262626', '#2f3033'], ['#5a5a5c', '#2b2b2e'], ['#d4d4d6', '#45464b'], ['#e9dfcf', '#2b2b2e'], ['#1e1e1e', '#232326'],
+    ['#f7f7f5', '#232326'], ['#1f2a44', '#232326'], ['#f0e0c2', '#f2efe8'], ['#45464b', '#232326'], ['#f4f4f2', '#f4f4f2'], ['#9b8a63', '#4a3a2e']];
+  const RIDERS = [null].concat(NAMES.map((name, i) => ({ name, shirt: CLOTHES[i][0], pants: CLOTHES[i][1], src: `riders/h${i + 1}.webp`, img: Object.assign(new Image(), { src: `riders/h${i + 1}.webp` }) })));
+  const ready = r => r && r.img.complete && r.img.naturalWidth > 0;
   const INK = '#1c1917', SKIN = '#c98e6a';
   /* A cartoon rider on Lamma's own delivery scooter, drawn facing right with (0,0) where the wheels touch the road.
-     t moves the wheels and legs; the big head is the friend's cartoon face. */
-  function drawCharacter(c, r, head, t, wob) {
+     t moves the wheels and legs; the big head is the friend's caricature. */
+  function drawCharacter(c, r, t, wob) {
     c.save(); c.lineJoin = 'round'; c.lineCap = 'round'; c.strokeStyle = INK; c.lineWidth = 2.6;
     const shape = (fill, f) => { c.beginPath(); f(); c.fillStyle = fill; c.fill(); c.stroke(); };
     // delivery box on the back
@@ -50,16 +53,16 @@
     // neck and the big head
     shape(SKIN, () => c.roundRect(-9, -76, 9, 9, 3));
     c.translate(-4, -96); c.rotate(wob || 0);
-    if (head) c.drawImage(head, -33, -36, 66, 66);
+    if (ready(r)) { const h = r.img.naturalHeight / 2.3, w = r.img.naturalWidth / 2.3; c.drawImage(r.img, -w / 2, 36 - h, w, h); }
     c.restore();
   }
-  const heads = RIDERS.map(r => { if (!r) return null; const im = new Image(); im.src = r.src; return im; });
+
   const store = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { } return null; };
   // background music: loaded once as a blob so it plays the same in the browser and the Android app
   let music = null, musicUrl = null;
   function getMusic() {
     if (music) return Promise.resolve(music);
-    return fetch('audio/dash2.mp3').then(r => r.blob()).then(b => {
+    return fetch('audio/dash3.mp3').then(r => r.blob()).then(b => {
       musicUrl = URL.createObjectURL(b); music = new Audio(musicUrl); music.loop = true; music.volume = 0.55; return music;
     }).catch(() => null);
   }
@@ -91,30 +94,30 @@
     let rider = Math.max(0, Math.min(RIDERS.length - 1, parseInt(store('lamma.rider') || '1', 10) || 0));
     let musicOn = store('lamma.music') !== 'off';
     const riderBtn = wrap.querySelector('#g-rider'), musicBtn = wrap.querySelector('#g-music');
-    const showRiderBtn = () => { riderBtn.innerHTML = rider ? `<img src="${RIDERS[rider].src}" alt="">` : '<span style="font-size:22px">🛵</span>'; };
+    const showRiderBtn = () => { riderBtn.innerHTML = rider ? `<img src="${faceThumb(rider)}" alt="">` : '<span style="font-size:22px">🛵</span>'; };
     const SPK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9z"/>';
     const showMusicBtn = () => { musicBtn.innerHTML = SPK + (musicOn ? '<path d="M16 9a4 4 0 010 6M18.5 6.5a8 8 0 010 11"/></svg>' : '<path d="M17 9l5 6M22 9l-5 6"/></svg>'); };
     showRiderBtn(); showMusicBtn();
     function playMusic() { if (!musicOn) return; getMusic().then(m => { if (m && musicOn && document.body.contains(wrap)) m.play().catch(() => { }); }); }
     function stopMusic() { if (music) music.pause(); }
+    function faceThumb(i) { return RIDERS[i].src; }
     function thumb(i) {
       const c = document.createElement('canvas'); c.width = c.height = 240; const x = c.getContext('2d');
       if (!x.roundRect) x.roundRect = function (a, b, w, h) { this.rect(a, b, w, h); };
-      x.translate(120, 214); x.scale(1.55, 1.55); drawCharacter(x, RIDERS[i], heads[i].complete ? heads[i] : null, 0, 0);
+      x.translate(120, 230); x.scale(1.3, 1.3); drawCharacter(x, RIDERS[i], 0, 0);
       return c.toDataURL('image/png');
     }
     function pickRider() {
       const was = state; if (state === 'run') state = 'paused';
       const d = document.createElement('div'); d.className = 'rider-pick';
-      d.innerHTML = `<div class="rp-box"><b>Choose your character</b><div class="rp-grid">${RIDERS.map((r, i) => `<button data-i="${i}" class="${i === rider ? 'on' : ''}">${r ? `<img src="${thumb(i)}" alt="">` : '<span>🛵</span>'}</button>`).join('')}</div></div>`;
+      d.innerHTML = `<div class="rp-box"><b>Choose your character</b><div class="rp-grid">${RIDERS.map((r, i) => `<button data-i="${i}" class="${i === rider ? 'on' : ''}">${r ? `<img src="${thumb(i)}" alt=""><i>${r.name}</i>` : '<span>🛵</span><i>Scooter</i>'}</button>`).join('')}</div></div>`;
       d.addEventListener('pointerdown', e => {
         e.stopPropagation(); const b = e.target.closest('[data-i]');
         if (b) { rider = +b.dataset.i; store('lamma.rider', String(rider)); showRiderBtn(); }
         if (b || e.target === d) { d.remove(); if (was === 'run') { state = 'run'; last = performance.now(); } }
       });
+      RIDERS.forEach((r, i) => { if (r && !ready(r)) r.img.addEventListener('load', () => { const im = d.querySelector(`[data-i="${i}"] img`); if (im) im.src = thumb(i); }, { once: true }); });
       wrap.appendChild(d);
-      // faces still loading on a first open: redraw those thumbnails when they arrive
-      heads.forEach((h, i) => { if (h && !h.complete) h.addEventListener('load', () => { const im = d.querySelector(`[data-i="${i}"] img`); if (im) im.src = thumb(i); }, { once: true }); });
     }
     riderBtn.addEventListener('pointerdown', e => { e.stopPropagation(); pickRider(); });
     musicBtn.addEventListener('pointerdown', e => { e.stopPropagation(); musicOn = !musicOn; store('lamma.music', musicOn ? 'on' : 'off'); showMusicBtn(); if (musicOn && state !== 'ready') playMusic(); else stopMusic(); });
@@ -288,7 +291,7 @@
     function drawRider(x, y, tilt) {
       const wob = state === 'run' ? Math.sin(dist / 22) * 0.06 : 0;
       ctx.save(); ctx.translate(x, y - 2); ctx.rotate(tilt); ctx.scale(0.86, 0.86);
-      drawCharacter(ctx, RIDERS[rider], heads[rider], dist / 10, wob);
+      drawCharacter(ctx, RIDERS[rider], dist / 10, wob);
       ctx.restore();
     }
     function draw(dt) {
@@ -305,7 +308,7 @@
       ctx.fillStyle = `rgba(0,0,0,${Math.max(0.06, 0.22 - air / 600)})`; ctx.beginPath(); ctx.ellipse(P.x, G - 2, Math.max(8, 20 - air / 12), 5, 0, 0, 7); ctx.fill();
       if (shield) { ctx.strokeStyle = 'rgba(96,165,250,.9)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(P.x, P.y - 22, 32 + Math.sin(dist / 30) * 2, 0, 7); ctx.stroke(); }
       const bob = onGround() && state === 'run' ? Math.sin(dist / 18) * 1.5 : 0;
-      if (rider && heads[rider].complete && heads[rider].naturalWidth) drawRider(P.x, P.y + 4 + bob, P.tilt);
+      if (rider && ready(RIDERS[rider])) drawRider(P.x, P.y + 4 + bob, P.tilt);
       else emoji('🛵', P.x, P.y + 4 + bob, P.size, true, P.tilt);
       // particles and floating texts
       for (const q of parts) { q.t += dt; q.x += q.vx * dt; q.y += q.vy * dt; q.vy += 600 * dt; ctx.globalAlpha = Math.max(0, 1 - q.t / q.life); ctx.fillStyle = q.color; ctx.beginPath(); ctx.arc(q.x, q.y, q.r, 0, 7); ctx.fill(); }
