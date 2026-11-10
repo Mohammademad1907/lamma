@@ -62,7 +62,7 @@
   let music = null, musicUrl = null;
   function getMusic() {
     if (music) return Promise.resolve(music);
-    return fetch('audio/dash4.mp3').then(r => r.blob()).then(b => {
+    return fetch('audio/dash3.mp3').then(r => r.blob()).then(b => {
       musicUrl = URL.createObjectURL(b); music = new Audio(musicUrl); music.loop = true; music.volume = 0.55; return music;
     }).catch(() => null);
   }
